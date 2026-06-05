@@ -22,15 +22,14 @@ localparam [1:0] COLOR_RED   = 2'd2;
 localparam [1:0] COLOR_BLUE  = 2'd3;
 
 localparam [3:0] BRIGHT_MIN = 4'd1;
-localparam [3:0] BRIGHT_MAX = 4'd6;
+localparam [3:0] BRIGHT_MAX = 4'd3;
 
-localparam [7:0] RUN_STEP_LAST    = 8'd99; // 100ms流动一次
+localparam [7:0] RUN_STEP_LAST    = 8'd249; // 250ms流动一次
 localparam [4:0] BREATH_STEP_LAST = 5'd24; // 25ms改变一次亮度
 
 wire cmd_is_flow   = rx_done && (rx_data[7:4] == 4'h1);
 wire cmd_is_breath = rx_done && (rx_data[7:4] == 4'h2);
 wire cmd_has_color = (rx_data[3:0] >= 4'h1) && (rx_data[3:0] <= 4'h3);
-wire [1:0] cmd_color = cmd_has_color ? rx_data[1:0] : sys_color;
 
 function [1:0] next_rgb_color;
     input [1:0] color;
@@ -43,20 +42,32 @@ function [1:0] next_rgb_color;
     end
 endfunction
 
-function [15:0] flow_pattern;
+function [7:0] flow_data_in10;
     input [2:0] pos;
     input [1:0] color;
     begin
-        flow_pattern = 16'd0;
+        flow_data_in10 = 8'd0;
         case(pos)
-            3'd0: flow_pattern[1:0]   = color;
-            3'd1: flow_pattern[3:2]   = color;
-            3'd2: flow_pattern[5:4]   = color;
-            3'd3: flow_pattern[7:6]   = color;
-            3'd4: flow_pattern[9:8]   = color;
-            3'd5: flow_pattern[11:10] = color;
-            3'd6: flow_pattern[13:12] = color;
-            3'd7: flow_pattern[15:14] = color;
+            3'd0: flow_data_in10[1:0] = color; // 灯0
+            3'd1: flow_data_in10[5:4] = color; // 灯1
+            3'd4: flow_data_in10[3:2] = color; // 灯4
+            3'd5: flow_data_in10[7:6] = color; // 灯5
+            default: flow_data_in10 = 8'd0;
+        endcase
+    end
+endfunction
+
+function [7:0] flow_data_in32;
+    input [2:0] pos;
+    input [1:0] color;
+    begin
+        flow_data_in32 = 8'd0;
+        case(pos)
+            3'd2: flow_data_in32[1:0] = color; // 灯2
+            3'd3: flow_data_in32[5:4] = color; // 灯3
+            3'd6: flow_data_in32[3:2] = color; // 灯6
+            3'd7: flow_data_in32[7:6] = color; // 灯7
+            default: flow_data_in32 = 8'd0;
         endcase
     end
 endfunction
@@ -164,22 +175,21 @@ always @(posedge clk or negedge rst_n) begin
     end else if(cmd_is_flow) begin
         run_cnt <= 8'd0;
         run_pos <= 3'd0;
-        led_colors <= flow_pattern(3'd0, cmd_color);
+        led_colors <= 16'd0;
     end else if(tick_1ms) begin
         case(sys_mode)
             MODE_STATIC: begin // 静态模式：所有灯同色
                 run_cnt <= 8'd0;
                 led_colors <= {8{sys_color}}; 
             end
-            MODE_FLOW: begin // 流水模式：按位置直接生成，避免切换模式时残留旧颜色
+            MODE_FLOW: begin // 流水模式：按参考工程的灰盒端口顺序直接输出
                 if(run_cnt == RUN_STEP_LAST) begin
                     run_cnt <= 8'd0;
                     run_pos <= run_pos_next;
-                    led_colors <= flow_pattern(run_pos_next, sys_color);
                 end else begin
                     run_cnt <= run_cnt + 1'b1;
-                    led_colors <= flow_pattern(run_pos, sys_color);
                 end
+                led_colors <= 16'd0;
             end
             MODE_BREATH: begin // 彩色呼吸模式：颜色循环，亮度由上面控制
                 run_cnt <= 8'd0;
@@ -193,12 +203,16 @@ end
 // 利用组合逻辑将符合人类直觉的 led_colors 数组，打乱映射到 data10 和 data32 中
 wire [7:0] led_data_in10;
 wire [7:0] led_data_in32;
+wire [7:0] mapped_led_data_in10;
+wire [7:0] mapped_led_data_in32;
 
 // 原始灰盒映射关系: 
 // data10: [7:6]=LED5, [5:4]=LED1, [3:2]=LED4, [1:0]=LED0
 // data32: [7:6]=LED7, [5:4]=LED3, [3:2]=LED6, [1:0]=LED2
-assign led_data_in10 = {led_colors[11:10], led_colors[3:2], led_colors[9:8], led_colors[1:0]};
-assign led_data_in32 = {led_colors[15:14], led_colors[7:6], led_colors[13:12], led_colors[5:4]};
+assign mapped_led_data_in10 = {led_colors[11:10], led_colors[3:2], led_colors[9:8], led_colors[1:0]};
+assign mapped_led_data_in32 = {led_colors[15:14], led_colors[7:6], led_colors[13:12], led_colors[5:4]};
+assign led_data_in10 = (sys_mode == MODE_FLOW) ? flow_data_in10(run_pos, sys_color) : mapped_led_data_in10;
+assign led_data_in32 = (sys_mode == MODE_FLOW) ? flow_data_in32(run_pos, sys_color) : mapped_led_data_in32;
 
 //==================== 5. 实例化模块 ====================
 
