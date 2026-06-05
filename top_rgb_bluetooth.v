@@ -13,6 +13,54 @@ wire        rx_done;       // 接收完成标志
 reg [1:0]   sys_mode;      // 系统当前模式: 0=静态, 1=流水, 2=呼吸
 reg [1:0]   sys_color;     // 当前基础颜色: 1=绿, 2=红, 3=蓝
 
+localparam [1:0] MODE_STATIC = 2'd0;
+localparam [1:0] MODE_FLOW   = 2'd1;
+localparam [1:0] MODE_BREATH = 2'd2;
+
+localparam [1:0] COLOR_GREEN = 2'd1;
+localparam [1:0] COLOR_RED   = 2'd2;
+localparam [1:0] COLOR_BLUE  = 2'd3;
+
+localparam [3:0] BRIGHT_MIN = 4'd1;
+localparam [3:0] BRIGHT_MAX = 4'd6;
+
+localparam [7:0] RUN_STEP_LAST    = 8'd99; // 100ms流动一次
+localparam [4:0] BREATH_STEP_LAST = 5'd24; // 25ms改变一次亮度
+
+wire cmd_is_flow   = rx_done && (rx_data[7:4] == 4'h1);
+wire cmd_is_breath = rx_done && (rx_data[7:4] == 4'h2);
+wire cmd_has_color = (rx_data[3:0] >= 4'h1) && (rx_data[3:0] <= 4'h3);
+wire [1:0] cmd_color = cmd_has_color ? rx_data[1:0] : sys_color;
+
+function [1:0] next_rgb_color;
+    input [1:0] color;
+    begin
+        case(color)
+            COLOR_GREEN: next_rgb_color = COLOR_RED;
+            COLOR_RED:   next_rgb_color = COLOR_BLUE;
+            default:     next_rgb_color = COLOR_GREEN;
+        endcase
+    end
+endfunction
+
+function [15:0] flow_pattern;
+    input [2:0] pos;
+    input [1:0] color;
+    begin
+        flow_pattern = 16'd0;
+        case(pos)
+            3'd0: flow_pattern[1:0]   = color;
+            3'd1: flow_pattern[3:2]   = color;
+            3'd2: flow_pattern[5:4]   = color;
+            3'd3: flow_pattern[7:6]   = color;
+            3'd4: flow_pattern[9:8]   = color;
+            3'd5: flow_pattern[11:10] = color;
+            3'd6: flow_pattern[13:12] = color;
+            3'd7: flow_pattern[15:14] = color;
+        endcase
+    end
+endfunction
+
 // 时间基准计数器 (产生1ms tick)
 reg [15:0]  cnt_1ms;
 wire        tick_1ms = (cnt_1ms == 16'd49_999);
@@ -30,15 +78,15 @@ end
 // 0x20: 彩色呼吸
 always @(posedge clk or negedge rst_n) begin
     if(!rst_n) begin
-        sys_mode  <= 2'd1; // 默认流水模式
-        sys_color <= 2'd1; // 默认绿色
+        sys_mode  <= MODE_FLOW;   // 默认流水模式
+        sys_color <= COLOR_GREEN; // 默认绿色
     end else if(rx_done) begin
         case(rx_data[7:4]) // 高4位代表模式
-            4'h0: sys_mode <= 2'd0; // 静态
-            4'h1: sys_mode <= 2'd1; // 流水
-            4'h2: sys_mode <= 2'd2; // 呼吸
+            4'h0: sys_mode <= MODE_STATIC; // 静态
+            4'h1: sys_mode <= MODE_FLOW;   // 流水
+            4'h2: sys_mode <= MODE_BREATH; // 呼吸
         endcase
-        if(rx_data[3:0] >= 4'h1 && rx_data[3:0] <= 4'h3) begin
+        if(cmd_has_color) begin
             sys_color <= rx_data[1:0]; // 低4位代表颜色 (1=绿,2=红,3=蓝)
         end
     end
@@ -61,29 +109,41 @@ end
 
 //==================== 2. 呼吸灯亮度控制 (解耦设计) ====================
 reg [4:0]  breath_cnt;    // 呼吸节奏计数器
-reg [3:0]  dynamic_bright;// 动态亮度 (1~15)
+reg [3:0]  dynamic_bright;// 动态亮度 (1~6)
 reg        breath_dir;    // 0:变亮, 1:变暗
+reg [1:0]  breath_color;  // 彩色呼吸当前颜色
 
 always @(posedge clk or negedge rst_n) begin
     if(!rst_n) begin
-        breath_cnt <= 0;
-        dynamic_bright <= 4'd1;
-        breath_dir <= 0;
+        breath_cnt <= 5'd0;
+        dynamic_bright <= BRIGHT_MAX;
+        breath_dir <= 1'b0;
+        breath_color <= COLOR_GREEN;
+    end else if(cmd_is_breath) begin
+        breath_cnt <= 5'd0;
+        dynamic_bright <= BRIGHT_MIN;
+        breath_dir <= 1'b0;
+        breath_color <= COLOR_GREEN;
     end else if(tick_1ms) begin
-        if(sys_mode == 2'd2) begin // 仅在呼吸模式下生效
+        if(sys_mode == MODE_BREATH) begin // 仅在呼吸模式下生效
             breath_cnt <= breath_cnt + 1'b1;
-            if(breath_cnt == 5'd25) begin // 控制呼吸速度 (每25ms改变一次亮度)
-                breath_cnt <= 0;
+            if(breath_cnt == BREATH_STEP_LAST) begin
+                breath_cnt <= 5'd0;
                 if(!breath_dir) begin
-                    if(dynamic_bright < 15) dynamic_bright <= dynamic_bright + 1'b1;
+                    if(dynamic_bright < BRIGHT_MAX) dynamic_bright <= dynamic_bright + 1'b1;
                     else breath_dir <= 1'b1;
                 end else begin
-                    if(dynamic_bright > 1) dynamic_bright <= dynamic_bright - 1'b1;
-                    else breath_dir <= 1'b0;
+                    if(dynamic_bright > BRIGHT_MIN) dynamic_bright <= dynamic_bright - 1'b1;
+                    else begin
+                        breath_dir <= 1'b0;
+                        breath_color <= next_rgb_color(breath_color);
+                    end
                 end
             end
         end else begin
-            dynamic_bright <= 4'd01; // 非呼吸模式，全亮
+            breath_cnt <= 5'd0;
+            breath_dir <= 1'b0;
+            dynamic_bright <= BRIGHT_MAX; // 非呼吸模式使用限幅后的常亮亮度
         end
     end
 end
@@ -93,29 +153,37 @@ end
 // [1:0]=LED0, [3:2]=LED1 ... [15:14]=LED7
 reg [15:0] led_colors;
 reg [7:0]  run_cnt;       // 流水速度计数器
+reg [2:0]  run_pos;       // 当前流水灯位置
+wire [2:0] run_pos_next = run_pos + 3'd1;
 
 always @(posedge clk or negedge rst_n) begin
     if(!rst_n) begin
         led_colors <= 16'd0;
-        run_cnt <= 0;
+        run_cnt <= 8'd0;
+        run_pos <= 3'd0;
+    end else if(cmd_is_flow) begin
+        run_cnt <= 8'd0;
+        run_pos <= 3'd0;
+        led_colors <= flow_pattern(3'd0, cmd_color);
     end else if(tick_1ms) begin
         case(sys_mode)
-            2'd0: begin // 静态模式：所有灯同色
+            MODE_STATIC: begin // 静态模式：所有灯同色
+                run_cnt <= 8'd0;
                 led_colors <= {8{sys_color}}; 
             end
-            2'd1: begin // 流水模式：移位控制
-                run_cnt <= run_cnt + 1'b1;
-                if(run_cnt >= 8'd100) begin // 100ms流动一次
-                    run_cnt <= 0;
-                    // 初始化或循环移位 (每次左移2位，相当于流向下一个灯)
-                    if(led_colors == 16'd0) 
-                        led_colors <= {14'd0, sys_color};
-                    else 
-                        led_colors <= {led_colors[13:0], led_colors[15:14]};
+            MODE_FLOW: begin // 流水模式：按位置直接生成，避免切换模式时残留旧颜色
+                if(run_cnt == RUN_STEP_LAST) begin
+                    run_cnt <= 8'd0;
+                    run_pos <= run_pos_next;
+                    led_colors <= flow_pattern(run_pos_next, sys_color);
+                end else begin
+                    run_cnt <= run_cnt + 1'b1;
+                    led_colors <= flow_pattern(run_pos, sys_color);
                 end
             end
-            2'd2: begin // 呼吸模式：颜色固定，亮度由上面控制
-                led_colors <= {8{sys_color}};
+            MODE_BREATH: begin // 彩色呼吸模式：颜色循环，亮度由上面控制
+                run_cnt <= 8'd0;
+                led_colors <= {8{breath_color}};
             end
         endcase
     end
