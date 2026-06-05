@@ -31,17 +31,6 @@ wire cmd_is_flow   = rx_done && (rx_data[7:4] == 4'h1);
 wire cmd_is_breath = rx_done && (rx_data[7:4] == 4'h2);
 wire cmd_has_color = (rx_data[3:0] >= 4'h1) && (rx_data[3:0] <= 4'h3);
 
-function [1:0] next_rgb_color;
-    input [1:0] color;
-    begin
-        case(color)
-            COLOR_GREEN: next_rgb_color = COLOR_RED;
-            COLOR_RED:   next_rgb_color = COLOR_BLUE;
-            default:     next_rgb_color = COLOR_GREEN;
-        endcase
-    end
-endfunction
-
 function [7:0] flow_data_in10;
     input [2:0] pos;
     input [1:0] color;
@@ -86,7 +75,7 @@ end
 // 通信协议定义（手机APP发送单字节Hex）：
 // 0x01: 静态绿   0x02: 静态红   0x03: 静态蓝
 // 0x11: 流水绿   0x12: 流水红   0x13: 流水蓝
-// 0x20: 彩色呼吸
+// 0x21: 呼吸绿   0x22: 呼吸红   0x23: 呼吸蓝
 always @(posedge clk or negedge rst_n) begin
     if(!rst_n) begin
         sys_mode  <= MODE_FLOW;   // 默认流水模式
@@ -120,21 +109,18 @@ end
 
 //==================== 2. 呼吸灯亮度控制 (解耦设计) ====================
 reg [4:0]  breath_cnt;    // 呼吸节奏计数器
-reg [3:0]  dynamic_bright;// 动态亮度 (1~6)
+reg [3:0]  dynamic_bright;// 动态亮度 (1~BRIGHT_MAX)
 reg        breath_dir;    // 0:变亮, 1:变暗
-reg [1:0]  breath_color;  // 彩色呼吸当前颜色
 
 always @(posedge clk or negedge rst_n) begin
     if(!rst_n) begin
         breath_cnt <= 5'd0;
         dynamic_bright <= BRIGHT_MAX;
         breath_dir <= 1'b0;
-        breath_color <= COLOR_GREEN;
     end else if(cmd_is_breath) begin
         breath_cnt <= 5'd0;
         dynamic_bright <= BRIGHT_MIN;
         breath_dir <= 1'b0;
-        breath_color <= COLOR_GREEN;
     end else if(tick_1ms) begin
         if(sys_mode == MODE_BREATH) begin // 仅在呼吸模式下生效
             breath_cnt <= breath_cnt + 1'b1;
@@ -145,10 +131,7 @@ always @(posedge clk or negedge rst_n) begin
                     else breath_dir <= 1'b1;
                 end else begin
                     if(dynamic_bright > BRIGHT_MIN) dynamic_bright <= dynamic_bright - 1'b1;
-                    else begin
-                        breath_dir <= 1'b0;
-                        breath_color <= next_rgb_color(breath_color);
-                    end
+                    else breath_dir <= 1'b0;
                 end
             end
         end else begin
@@ -191,9 +174,9 @@ always @(posedge clk or negedge rst_n) begin
                 end
                 led_colors <= 16'd0;
             end
-            MODE_BREATH: begin // 彩色呼吸模式：颜色循环，亮度由上面控制
+            MODE_BREATH: begin // 单色呼吸模式：颜色固定，亮度由上面控制
                 run_cnt <= 8'd0;
-                led_colors <= {8{breath_color}};
+                led_colors <= {8{sys_color}};
             end
         endcase
     end
