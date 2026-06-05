@@ -1,0 +1,33 @@
+# Quartus generated databases and build output
+/db/
+/incremental_db/
+/output_files/
+/simulation/questa/
+
+# Quartus transient/report artifacts
+*.qarlog
+*.rpt
+*.summary
+*.smsg
+*.qmsg
+*.done
+*.jdi
+*.jditmp
+*.sof
+*.pof
+*.cdf
+*.sld
+*.pin
+*.vo
+*.sft
+
+# Local archives/backups
+*.7z
+*.zip
+*.rar
+
+# Editor/OS noise
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
