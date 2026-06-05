@@ -39,7 +39,7 @@
 
 set_global_assignment -name FAMILY "Cyclone IV E"
 set_global_assignment -name DEVICE EP4CE15F17C8
-set_global_assignment -name TOP_LEVEL_ENTITY top_rgb_bluetooth
+set_global_assignment -name TOP_LEVEL_ENTITY top_ws2812_sample_test
 set_global_assignment -name ORIGINAL_QUARTUS_VERSION 24.1STD.0
 set_global_assignment -name PROJECT_CREATION_TIME_DATE "10:31:24  MAY 12, 2026"
 set_global_assignment -name LAST_QUARTUS_VERSION "24.1std.0 Lite Edition"
@@ -57,6 +57,9 @@ set_location_assignment PIN_E1 -to clk
 set_location_assignment PIN_T2 -to led_out
 set_location_assignment PIN_L2 -to rst_n
 set_global_assignment -name VERILOG_FILE top_rgb_bluetooth.v
+set_global_assignment -name VERILOG_FILE top_breath_time_test.v
+set_global_assignment -name VERILOG_FILE top_ws2812_sample_test.v
+set_global_assignment -name VERILOG_FILE ws2812_fast.v
 set_global_assignment -name QXP_FILE "D:/UserData/Documents/School/2025-2026-2/电子测量工具与平台/实验3/第一周课程所需文件/ws2812-u_ws2812.qxp"
 set_global_assignment -name POWER_PRESET_COOLING_SOLUTION "23 MM HEAT SINK WITH 200 LFPM AIRFLOW"
 set_global_assignment -name POWER_BOARD_THERMAL_MODEL "NONE (CONSERVATIVE)"
