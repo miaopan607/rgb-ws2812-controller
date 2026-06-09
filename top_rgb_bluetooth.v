@@ -23,7 +23,7 @@ localparam [1:0] COLOR_RED   = 2'd2;
 localparam [1:0] COLOR_BLUE  = 2'd3;
 
 localparam [7:0] BRIGHT_MIN = 8'd0;
-localparam [7:0] BRIGHT_MAX = 8'h33; // 等效原驱动 4'd3 的亮度
+localparam [7:0] BRIGHT_MAX = 8'h11;
 
 localparam [7:0] RUN_STEP_LAST    = 8'd249; // 250ms流动一次
 localparam [7:0] GRADIENT_STEP_LAST = 8'd249; // 250ms切换一次渐变相位
