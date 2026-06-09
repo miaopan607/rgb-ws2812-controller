@@ -17,7 +17,7 @@ module breath_brightness_tb;
 
     integer csv_file;      // CSV 输出文件句柄。
     integer sim_ms;        // 仿真推进的毫秒计数。
-    reg [3:0] last_bright; // 上一次记录的亮度值，用于检测变化。
+    reg [7:0] last_bright; // 上一次记录的亮度值，用于检测变化。
 
     //--------------------------------------------------------------------------
     // 被测顶层模块。
@@ -49,7 +49,7 @@ module breath_brightness_tb;
         rst_n = 1'b0;
         uart_rx = 1'b1;
         sim_ms = 0;
-        last_bright = 4'hf;
+        last_bright = 8'hff;
 
         #200;
         rst_n = 1'b1;
@@ -57,12 +57,13 @@ module breath_brightness_tb;
         // 直接进入呼吸模式；该测试仅观察亮度序列，不验证 UART 接收器。
         dut.sys_mode = 2'd2;
         dut.sys_color = 2'd1;
-        dut.breath_cnt = 5'd0;
-        dut.dynamic_bright = 4'd1;
+        dut.breath_step_cnt = 32'd0;
+        dut.breath_accum = 32'd0;
+        dut.dynamic_bright = 8'd0;
         dut.breath_dir = 1'b0;
 
         // 推进足够长的时间，以观察多个亮度台阶变化。
-        repeat (260) tick_1ms_fast();
+        repeat (2200) tick_1ms_fast();
 
         $fclose(csv_file);
         $finish;

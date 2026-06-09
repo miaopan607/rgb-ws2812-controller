@@ -36,7 +36,12 @@ localparam [7:0] BRIGHT_MAX = 8'h11; // 常亮和呼吸模式最大亮度。
 
 localparam [7:0] RUN_STEP_LAST      = 8'd249; // 250 ms 流动一次，基于 1 ms tick。
 localparam [7:0] GRADIENT_STEP_LAST = 8'd249; // 250 ms 切换一次渐变相位，基于 1 ms tick。
-localparam [2:0] BREATH_STEP_LAST   = 3'd4;   // 5 ms 改变一次亮度台阶，基于 1 ms tick。
+localparam integer BREATH_PERIOD_MS      = 2000; // 完整呼吸周期，单位 ms，建议配置为 2 或更大。
+localparam integer BREATH_HALF_PERIOD_MS = BREATH_PERIOD_MS / 2; // 上升半周期，单位 ms。
+localparam integer BREATH_FALL_PERIOD_MS = BREATH_PERIOD_MS - BREATH_HALF_PERIOD_MS; // 下降半周期，单位 ms。
+localparam integer BREATH_RISE_DENOM     = (BREATH_HALF_PERIOD_MS > 1) ? (BREATH_HALF_PERIOD_MS - 1) : 1; // 上升段归一化分母。
+localparam integer BREATH_FALL_DENOM     = (BREATH_FALL_PERIOD_MS > 1) ? (BREATH_FALL_PERIOD_MS - 1) : 1; // 下降段归一化分母。
+localparam integer BREATH_RANGE          = BRIGHT_MAX - BRIGHT_MIN; // 呼吸亮度变化范围。
 
 //==================== 命令译码辅助信号 ====================
 wire cmd_is_flow     = rx_done && (rx_data[7:4] == 4'h1); // 收到流水模式命令。
@@ -165,38 +170,64 @@ end
 // end
 
 //==================== 2. 呼吸灯亮度控制 (解耦设计) ====================
-reg [2:0]  breath_cnt;     // 呼吸节奏计数器，每 BREATH_STEP_LAST+1 个 tick 调整一次亮度。
-reg [7:0]  dynamic_bright; // 动态亮度，输出给 ws2812_fast。
-reg        breath_dir;     // 呼吸方向: 0=变亮, 1=变暗。
+reg [31:0] breath_step_cnt;  // 当前半周期内的 1 ms 节拍计数。
+reg [31:0] breath_accum;     // 亮度台阶误差累加器，用于在固定周期内均匀分布亮度变化。
+reg [7:0]  dynamic_bright;   // 动态亮度，输出给 ws2812_fast。
+reg        breath_dir;       // 呼吸方向: 0=变亮, 1=变暗。
+wire [31:0] breath_rise_accum_next = breath_accum + BREATH_RANGE; // 上升段下一拍累加值。
+wire [31:0] breath_fall_accum_next = breath_accum + BREATH_RANGE; // 下降段下一拍累加值。
+wire        breath_rise_step_en = (breath_rise_accum_next >= BREATH_RISE_DENOM); // 上升段是否调整 1 档亮度。
+wire        breath_fall_step_en = (breath_fall_accum_next >= BREATH_FALL_DENOM); // 下降段是否调整 1 档亮度。
+wire [31:0] breath_rise_accum_reload = breath_rise_step_en ? (breath_rise_accum_next - BREATH_RISE_DENOM) : breath_rise_accum_next; // 上升段累加器回写值。
+wire [31:0] breath_fall_accum_reload = breath_fall_step_en ? (breath_fall_accum_next - BREATH_FALL_DENOM) : breath_fall_accum_next; // 下降段累加器回写值。
 
-// 呼吸模式下在 BRIGHT_MIN 和 BRIGHT_MAX 之间往返改变亮度。
+// 呼吸模式下以 BREATH_PERIOD_MS 为固定完整周期生成亮度三角波。
 // 非呼吸模式将亮度恢复到 BRIGHT_MAX，保证静态/流水/渐变模式常亮。
 always @(posedge clk or negedge rst_n) begin
     if(!rst_n) begin
-        breath_cnt <= 3'd0;
+        breath_step_cnt <= 32'd0;
+        breath_accum <= 32'd0;
         dynamic_bright <= BRIGHT_MAX;
         breath_dir <= 1'b0;
     end else if(cmd_is_breath) begin
-        breath_cnt <= 3'd0;
+        breath_step_cnt <= 32'd0;
+        breath_accum <= 32'd0;
         dynamic_bright <= BRIGHT_MIN;
         breath_dir <= 1'b0;
     end else if(tick_1ms) begin
         if(sys_mode == MODE_BREATH) begin // 仅在呼吸模式下生效
-            breath_cnt <= breath_cnt + 1'b1;
-            if(breath_cnt == BREATH_STEP_LAST) begin
-                breath_cnt <= 3'd0;
-                if(!breath_dir) begin
-                    // 上升段: 未达到最大亮度则递增，否则切换为下降段。
-                    if(dynamic_bright < BRIGHT_MAX) dynamic_bright <= dynamic_bright + 1'b1;
-                    else breath_dir <= 1'b1;
+            if(!breath_dir) begin
+                // 上升半周期固定持续 BREATH_HALF_PERIOD_MS，期间均匀提升亮度。
+                if(breath_step_cnt == BREATH_HALF_PERIOD_MS - 1) begin
+                    breath_step_cnt <= 32'd0;
+                    breath_accum <= 32'd0;
+                    dynamic_bright <= BRIGHT_MAX;
+                    breath_dir <= 1'b1;
                 end else begin
-                    // 下降段: 未达到最小亮度则递减，否则切换为上升段。
-                    if(dynamic_bright > BRIGHT_MIN) dynamic_bright <= dynamic_bright - 1'b1;
-                    else breath_dir <= 1'b0;
+                    breath_step_cnt <= breath_step_cnt + 1'b1;
+                    breath_accum <= breath_rise_accum_reload;
+                    if(breath_rise_step_en && (dynamic_bright < BRIGHT_MAX)) begin
+                        dynamic_bright <= dynamic_bright + 1'b1;
+                    end
+                end
+            end else begin
+                // 下降半周期固定持续 BREATH_FALL_PERIOD_MS，期间均匀降低亮度。
+                if(breath_step_cnt == BREATH_FALL_PERIOD_MS - 1) begin
+                    breath_step_cnt <= 32'd0;
+                    breath_accum <= 32'd0;
+                    dynamic_bright <= BRIGHT_MIN;
+                    breath_dir <= 1'b0;
+                end else begin
+                    breath_step_cnt <= breath_step_cnt + 1'b1;
+                    breath_accum <= breath_fall_accum_reload;
+                    if(breath_fall_step_en && (dynamic_bright > BRIGHT_MIN)) begin
+                        dynamic_bright <= dynamic_bright - 1'b1;
+                    end
                 end
             end
         end else begin
-            breath_cnt <= 3'd0;
+            breath_step_cnt <= 32'd0;
+            breath_accum <= 32'd0;
             breath_dir <= 1'b0;
             dynamic_bright <= BRIGHT_MAX; // 非呼吸模式使用限幅后的常亮亮度
         end
