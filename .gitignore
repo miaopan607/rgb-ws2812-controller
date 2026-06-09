@@ -11,6 +11,7 @@
 
 # Quartus transient/report artifacts
 *.qarlog
+*.qws
 *.rpt
 *.summary
 *.smsg
