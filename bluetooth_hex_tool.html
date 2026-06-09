@@ -146,13 +146,51 @@
 
     .flow-order {
       display: grid;
-      grid-template-columns: repeat(8, minmax(0, 1fr));
-      gap: 8px;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
     }
 
-    .flow-order input {
-      text-align: center;
-      font-family: var(--mono);
+    .flow-lamp {
+      position: relative;
+      display: grid;
+      height: auto;
+      min-height: 74px;
+      place-items: center;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #f9fafb;
+      color: var(--text);
+      cursor: pointer;
+    }
+
+    .flow-lamp.selected {
+      border-color: var(--accent);
+      background: #fff;
+      color: var(--accent);
+    }
+
+    .flow-lamp-number {
+      display: grid;
+      width: 30px;
+      height: 30px;
+      place-items: center;
+      border: 2px solid currentColor;
+      border-radius: 50%;
+      font-size: 24px;
+      font-weight: 700;
+      line-height: 1;
+    }
+
+    .flow-lamp:not(.selected) .flow-lamp-number {
+      display: none;
+    }
+
+    .flow-lamp-step {
+      display: none;
+      min-height: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.2;
     }
 
     .quick-buttons {
@@ -312,12 +350,13 @@
         <h2 class="section-title">流水灯序</h2>
         <div class="flow-order" id="flowOrder"></div>
         <div class="quick-buttons">
-          <button type="button" data-order="0,1,2,3,4,5,6,7">正序</button>
-          <button type="button" data-order="7,6,5,4,3,2,1,0">反序</button>
-          <button type="button" data-order="0,2,4,6,1,3,5,7">先偶后奇</button>
-          <button type="button" data-order="0,4,1,5,2,6,3,7">交错</button>
+          <button type="button" data-order="3,2,1,0,4,5,6,7">正序</button>
+          <button type="button" data-order="7,6,5,4,0,1,2,3">反序</button>
+          <button type="button" data-order="3,1,4,6,2,0,5,7">先偶后奇</button>
+          <button type="button" data-order="3,4,2,5,1,6,0,7">交错</button>
+          <button type="button" id="clearOrderButton">清空选择</button>
         </div>
-        <div class="hint">必须填 0~7，且每个编号只能出现一次。</div>
+        <div class="hint">按想要的流水顺序点击灯块；页面显示 1~8，发送时自动转换为协议需要的 0~7。</div>
       </div>
     </section>
 
@@ -355,39 +394,42 @@
     const copyButtonEl = document.getElementById("copyButton");
     const copyCompactButtonEl = document.getElementById("copyCompactButton");
     const resetButtonEl = document.getElementById("resetButton");
+    const clearOrderButtonEl = document.getElementById("clearOrderButton");
     const storageKey = "rgbBluetoothHexToolSettings";
     const defaultSettings = {
       mode: "1",
       color: "#00ff00",
       brightness: "17",
       period: "20",
-      order: ["0", "1", "2", "3", "4", "5", "6", "7"]
+      order: ["3", "2", "1", "0", "4", "5", "6", "7"]
     };
 
     const labels = [
       "帧头", "帧头", "模式", "R", "G", "B", "亮度", "周期",
       "灯序0", "灯序1", "灯序2", "灯序3", "灯序4", "灯序5", "灯序6", "灯序7", "校验"
     ];
+    const lampToHardware = [3, 2, 1, 0, 4, 5, 6, 7]; // 页面上排从左到右与硬件编号相反，底排保持一致。
 
-    // 初始化 8 个灯序输入框，避免手写重复 DOM。
+    // 初始化 8 个图形化灯块，同时保留隐藏输入作为协议数据源。
     for (let index = 0; index < 8; index += 1) {
-      const field = document.createElement("div");
-      field.className = "field";
-      const label = document.createElement("label");
-      label.textContent = `第 ${index + 1} 步`;
-      label.setAttribute("for", `order${index}`);
+      const lamp = document.createElement("button");
+      lamp.type = "button";
+      lamp.className = "flow-lamp";
+      lamp.dataset.lamp = String(index);
+      lamp.setAttribute("aria-label", `LED ${index + 1}`);
+      lamp.innerHTML = `<span class="flow-lamp-number"></span><span class="flow-lamp-step"></span>`;
       const input = document.createElement("input");
       input.id = `order${index}`;
-      input.type = "number";
+      input.type = "hidden";
       input.min = "0";
       input.max = "7";
       input.value = String(index);
       input.dataset.orderInput = "true";
-      field.append(label, input);
-      flowOrderEl.appendChild(field);
+      flowOrderEl.append(lamp, input);
     }
 
     const orderInputs = Array.from(document.querySelectorAll("[data-order-input='true']"));
+    const flowLamps = Array.from(document.querySelectorAll("[data-lamp]"));
 
     function clampByte(value, fallback) {
       const number = Number.parseInt(value, 10);
@@ -433,12 +475,56 @@
     }
 
     function readOrder() {
-      return orderInputs.map((input) => clampByte(input.value, 0));
+      return orderInputs.map((input) => clampByte(input.value, -1));
     }
 
     function validateOrder(order) {
       const seen = new Set(order);
       return order.every((value) => value >= 0 && value <= 7) && seen.size === 8;
+    }
+
+    function sanitizeOrderValues(values) {
+      const seen = new Set();
+      return values
+        .map((value) => Number.parseInt(value, 10))
+        .filter((value) => value >= 0 && value <= 7 && !seen.has(value) && seen.add(value));
+    }
+
+    function writeOrder(values) {
+      // 隐藏输入数量固定为 8，空字符串表示该步骤还没有选灯。
+      const clean = sanitizeOrderValues(values);
+      orderInputs.forEach((input, index) => {
+        input.value = index < clean.length ? String(clean[index]) : "";
+      });
+    }
+
+    function renderFlowLamps(order) {
+      const orderSteps = new Map();
+      order.forEach((ledIndex, stepIndex) => {
+        if (ledIndex >= 0 && ledIndex <= 7 && !orderSteps.has(ledIndex)) {
+          orderSteps.set(ledIndex, stepIndex + 1);
+        }
+      });
+
+      flowLamps.forEach((lamp) => {
+        const ledIndex = lampToHardware[clampByte(lamp.dataset.lamp, 0)];
+        const step = orderSteps.get(ledIndex);
+        const stepEl = lamp.querySelector(".flow-lamp-step");
+        lamp.classList.toggle("selected", Boolean(step));
+        lamp.querySelector(".flow-lamp-number").textContent = step ? String(step) : "";
+        stepEl.textContent = "";
+      });
+    }
+
+    function toggleLampInOrder(ledIndex) {
+      const order = sanitizeOrderValues(orderInputs.map((input) => input.value));
+      const exists = order.indexOf(ledIndex);
+      if (exists >= 0) {
+        order.splice(exists, 1);
+      } else if (order.length < 8) {
+        order.push(ledIndex);
+      }
+      writeOrder(order);
     }
 
     function readSettings() {
@@ -459,9 +545,7 @@
       brightnessNumberEl.value = settings.brightness;
       periodEl.value = settings.period;
       periodNumberEl.value = settings.period;
-      settings.order.slice(0, 8).forEach((value, index) => {
-        orderInputs[index].value = value;
-      });
+      writeOrder(settings.order.slice(0, 8));
     }
 
     function saveSettings() {
@@ -494,7 +578,8 @@
       const brightness = clampByte(brightnessEl.value, 0);
       const period = Math.max(1, clampByte(periodEl.value, 20));
       const order = readOrder();
-      const payload = [mode, r, g, b, brightness, period, ...order];
+      const payloadOrder = order.map((value) => (value >= 0 && value <= 7 ? value : 0));
+      const payload = [mode, r, g, b, brightness, period, ...payloadOrder];
       const checksum = payload.reduce((sum, value) => sum ^ value, 0);
       return {
         mode,
@@ -535,10 +620,11 @@
       renderModeHints(frame.mode);
       colorHintEl.textContent = `RGB: ${frame.rgb.map(toHex).join(" ")}`;
       hexOutputEl.textContent = hexText;
+      renderFlowLamps(frame.order);
       renderTable(frame.bytes);
 
       if (!orderOk) {
-        statusEl.innerHTML = "<span class='error'>流水灯序无效：必须包含 0~7 且不能重复。</span>";
+        statusEl.innerHTML = "<span class='error'>流水灯序无效：请按顺序点满 8 个灯。</span>";
       } else if (frame.mode === 3) {
         statusEl.textContent = "渐变模式暂时只使用亮度字段，RGB 和周期会被板子忽略。";
       } else {
@@ -550,9 +636,16 @@
       saveSettings();
     }
 
-    [modeEl, colorEl, ...orderInputs].forEach((el) => {
+    [modeEl, colorEl].forEach((el) => {
       el.addEventListener("input", update);
       el.addEventListener("change", update);
+    });
+
+    flowLamps.forEach((lamp) => {
+      lamp.addEventListener("click", () => {
+        toggleLampInOrder(lampToHardware[clampByte(lamp.dataset.lamp, 0)]);
+        update();
+      });
     });
 
     brightnessEl.addEventListener("input", () => {
@@ -587,11 +680,14 @@
 
     document.querySelectorAll("[data-order]").forEach((button) => {
       button.addEventListener("click", () => {
-        button.dataset.order.split(",").forEach((value, index) => {
-          orderInputs[index].value = value;
-        });
+        writeOrder(button.dataset.order.split(","));
         update();
       });
+    });
+
+    clearOrderButtonEl.addEventListener("click", () => {
+      writeOrder([]);
+      update();
     });
 
     copyButtonEl.addEventListener("click", async () => {
