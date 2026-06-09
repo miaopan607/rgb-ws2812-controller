@@ -17,7 +17,7 @@ module breath_brightness_tb;
 
     integer csv_file;      // CSV 输出文件句柄。
     integer sim_ms;        // 仿真推进的毫秒计数。
-    reg [7:0] last_bright; // 上一次记录的亮度值，用于检测变化。
+    reg [15:0] last_bright; // 上一次记录的亮度值，用于检测变化。
 
     //--------------------------------------------------------------------------
     // 被测顶层模块。
@@ -62,7 +62,7 @@ module breath_brightness_tb;
         dut.cfg_brightness = 8'h40;
         dut.cfg_period_100ms = 8'd20;
         dut.breath_step_cnt = 32'd0;
-        dut.breath_bright = 8'd0;
+        dut.breath_bright = 16'd0;
 
         // 推进足够长的时间，以观察多个亮度台阶变化。
         repeat (2200) tick_1ms_fast();
@@ -110,7 +110,7 @@ module ws2812 (
     input        rst_n,            // 占位复位输入。
     input [191:0] led_rgb_data,    // 占位 RGB 输入。
     input        mode,             // 占位模式输入。
-    input  [7:0] led_brightness,   // 占位亮度输入。
+    input [15:0] led_brightness,   // 占位亮度输入。
     output       led_out           // 固定为低电平的占位输出。
 );
     // 保留未使用端口，避免旧测试或旧顶层引用缺失模块。

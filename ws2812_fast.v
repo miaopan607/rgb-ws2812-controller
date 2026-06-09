@@ -5,14 +5,14 @@
 //   1. 每帧固定发送 8 颗 LED，每颗 LED 发送 24 bit GRB 数据。
 //   2. 上层按 LED0~LED7 提供 RGB 数据，本模块在发送时转换成 WS2812 的 GRB 顺序。
 //   3. 在帧间复位结束时锁存输入，保证一整帧输出期间颜色和亮度稳定。
-//   4. led_brightness 是全局亮度缩放参数，0 为全灭，255 接近原始颜色。
+//   4. led_brightness 是 16 bit 全局亮度缩放参数，0 为全灭，65535 接近原始颜色。
 //==============================================================================
 module ws2812_fast(
     input          clk,              // 50 MHz 系统时钟。
     input          rst_n,            // 异步低电平复位。
     input  [191:0] led_rgb_data,     // 8 颗 LED 的 RGB 数据，LEDn 位段为 [n*24 +: 24] = {R,G,B}。
     input          mode,             // 彩色输出使能；为 0 时所有 LED 熄灭。
-    input  [7:0]   led_brightness,   // 全局亮度缩放值，0=灭，255=最大。
+    input  [15:0]  led_brightness,   // 全局亮度缩放值，0=灭，65535=最大。
     output reg     led_out           // WS2812 串行数据输出。
 );
 
@@ -34,7 +34,7 @@ reg [11:0]  reset_cnt;               // 帧间复位低电平计数器。
 reg         reset_state;             // 复位间隔状态标志，1=输出低电平复位。
 reg [191:0] led_rgb_data_latched;    // 帧起始处锁存的 RGB 数据。
 reg         mode_latched;            // 帧起始处锁存的模式控制。
-reg [7:0]   led_brightness_latched;  // 帧起始处锁存的亮度值。
+reg [15:0]  led_brightness_latched;  // 帧起始处锁存的亮度值。
 
 //------------------------------------------------------------------------------
 // 当前发送 bit 的组合计算。
@@ -45,16 +45,16 @@ wire [5:0]  high_cycles   = current_bit ? T1H_CYCLES[5:0] : T0H_CYCLES[5:0]; // 
 
 //------------------------------------------------------------------------------
 // 函数: scale_channel
-// 功能: 对单个 RGB 通道做 8 bit 全局亮度缩放。
+// 功能: 对单个 RGB 通道做 16 bit 全局亮度缩放。
 //------------------------------------------------------------------------------
 function [7:0] scale_channel;
     input [7:0] channel_value; // 原始通道值。
-    input [7:0] bright_value;  // 全局亮度值。
-    reg [16:0] product;        // 乘积最大为 255*256，保留 17 bit 避免溢出。
+    input [15:0] bright_value; // 全局亮度值。
+    reg [24:0] product;        // 乘积最大为 255*65536，保留 25 bit 避免溢出。
     begin
-        // 使用 (brightness + 1) / 256 近似缩放，使 255 时能输出原始通道值。
-        product = channel_value * ({1'b0, bright_value} + 9'd1);
-        scale_channel = product[15:8];
+        // 使用 (brightness + 1) / 65536 近似缩放，使 65535 时能输出原始通道值。
+        product = channel_value * ({1'b0, bright_value} + 17'd1);
+        scale_channel = product[23:16];
     end
 endfunction
 
@@ -113,7 +113,7 @@ always @(posedge clk or negedge rst_n) begin
         reset_state <= 1'b1;
         led_rgb_data_latched <= 192'd0;
         mode_latched <= 1'b0;
-        led_brightness_latched <= 8'd0;
+        led_brightness_latched <= 16'd0;
     end else if (reset_state) begin
         // 帧间复位阶段: 数据线持续拉低，达到复位时间后准备发送新帧。
         led_out <= 1'b0;

@@ -58,7 +58,7 @@ ws2812_fast u_ws2812_fast(
     .rst_n          (rst_n),
     .led_rgb_data   (test_rgb_data),
     .mode           (1'b1),
-    .led_brightness (brightness),
+    .led_brightness ({brightness, brightness}),
     .led_out        (led_out)
 );
 

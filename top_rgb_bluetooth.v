@@ -282,55 +282,47 @@ end
 
 //==================== 3. 呼吸亮度控制 ====================
 reg [31:0] breath_step_cnt; // 当前完整呼吸周期内的 1 ms 节拍计数。
-reg [31:0] breath_accum;    // 亮度台阶误差累加器，用于把亮度变化均匀分布到半周期内。
-reg [7:0]  breath_bright;   // 呼吸模式实时亮度，输出给 ws2812_fast。
-reg        breath_dir;      // 呼吸方向: 0=变亮，1=变暗。
+reg [15:0] breath_bright;   // 呼吸模式 16 bit 内部亮度，输出给 ws2812_fast。
 
 wire [15:0] breath_period_ms = {cfg_period_100ms, 2'b00} + cfg_period_100ms; // period * 5。
 wire [15:0] breath_period_ms_x20 = {breath_period_ms, 4'b0000} + {breath_period_ms, 2'b00}; // period * 100。
 wire [15:0] breath_period_safe = (breath_period_ms_x20 < 16'd2) ? 16'd2 : breath_period_ms_x20;
 wire [15:0] breath_half_period = (breath_period_safe >> 1);
-wire [15:0] breath_half_safe = (breath_half_period < 16'd2) ? 16'd2 : breath_half_period;
-wire [31:0] breath_step_next_accum = breath_accum + cfg_brightness;
-wire        breath_step_en = (breath_step_next_accum >= (breath_half_safe - 1'b1));
-wire [31:0] breath_accum_reload = breath_step_en ? (breath_step_next_accum - (breath_half_safe - 1'b1)) : breath_step_next_accum;
+wire [15:0] breath_full_last = breath_period_safe - 1'b1;
+wire [15:0] breath_rise_denom = (breath_half_period < 16'd2) ? 16'd1 : (breath_half_period - 1'b1);
+wire [15:0] breath_fall_period = breath_period_safe - breath_half_period;
+wire [15:0] breath_fall_denom = (breath_fall_period < 16'd2) ? 16'd1 : (breath_fall_period - 1'b1);
+wire [15:0] breath_target_bright = {cfg_brightness, cfg_brightness}; // 8 bit 用户亮度扩展成 16 bit 内部亮度。
+wire [31:0] breath_fall_step = (breath_step_cnt >= breath_half_period) ? (breath_step_cnt - breath_half_period) : 32'd0;
+wire [47:0] breath_rise_numer = breath_target_bright * breath_step_cnt;
+wire [47:0] breath_fall_numer = breath_target_bright * breath_fall_step;
+wire [31:0] breath_rise_value = breath_rise_numer / breath_rise_denom;
+wire [31:0] breath_fall_delta = breath_fall_numer / breath_fall_denom;
+wire [15:0] breath_rise_limited = (breath_rise_value > breath_target_bright) ? breath_target_bright : breath_rise_value[15:0];
+wire [15:0] breath_fall_limited = (breath_fall_delta > breath_target_bright) ? 16'd0 : (breath_target_bright - breath_fall_delta[15:0]);
+wire [15:0] breath_calc_bright = (breath_step_cnt < breath_half_period) ? breath_rise_limited : breath_fall_limited;
 wire        frame_applied = rx_done && (rx_state == RX_CHECKSUM) && frame_accept; // 合法新帧脉冲。
 
 always @(posedge clk or negedge rst_n) begin
     if(!rst_n) begin
         breath_step_cnt <= 32'd0;
-        breath_accum <= 32'd0;
-        breath_bright <= 8'd0;
-        breath_dir <= 1'b0;
+        breath_bright <= 16'd0;
     end else if(frame_applied && (tmp_mode[1:0] == MODE_BREATH)) begin
         // 新呼吸参数下发后从最暗处重新开始，便于手机端看到参数立即生效。
         breath_step_cnt <= 32'd0;
-        breath_accum <= 32'd0;
-        breath_bright <= 8'd0;
-        breath_dir <= 1'b0;
+        breath_bright <= 16'd0;
     end else if(tick_1ms) begin
         if(sys_mode == MODE_BREATH) begin
-            if(breath_step_cnt >= (breath_half_safe - 1'b1)) begin
+            // 使用 16 bit 内部亮度计算呼吸曲线，低亮度时也保留更细的相位精度。
+            breath_bright <= breath_calc_bright;
+            if(breath_step_cnt >= breath_full_last) begin
                 breath_step_cnt <= 32'd0;
-                breath_accum <= 32'd0;
-                breath_dir <= ~breath_dir;
-                breath_bright <= breath_dir ? 8'd0 : cfg_brightness;
             end else begin
                 breath_step_cnt <= breath_step_cnt + 1'b1;
-                breath_accum <= breath_accum_reload;
-                if(breath_step_en) begin
-                    if(!breath_dir && (breath_bright < cfg_brightness)) begin
-                        breath_bright <= breath_bright + 1'b1;
-                    end else if(breath_dir && (breath_bright > 8'd0)) begin
-                        breath_bright <= breath_bright - 1'b1;
-                    end
-                end
             end
         end else begin
             breath_step_cnt <= 32'd0;
-            breath_accum <= 32'd0;
-            breath_bright <= 8'd0;
-            breath_dir <= 1'b0;
+            breath_bright <= 16'd0;
         end
     end
 end
@@ -344,7 +336,7 @@ reg [191:0] led_rgb_data;   // 输出给 ws2812_fast 的 8 颗 LED RGB 数据。
 
 wire [23:0] cfg_rgb = {cfg_r, cfg_g, cfg_b};         // 当前 App 下发的基础 RGB 颜色。
 wire [2:0]  active_flow_led = get_flow_led(run_pos); // 流水当前应点亮的 LED 编号。
-wire [7:0]  output_brightness = (sys_mode == MODE_BREATH) ? breath_bright : cfg_brightness;
+wire [15:0] output_brightness = (sys_mode == MODE_BREATH) ? breath_bright : {cfg_brightness, cfg_brightness};
 
 always @(posedge clk or negedge rst_n) begin
     if(!rst_n) begin
