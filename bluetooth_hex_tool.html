@@ -408,10 +408,28 @@
       ];
     }
 
-    function syncPair(source, target) {
-      const value = clampByte(source.value, 0);
-      source.value = String(value);
-      target.value = String(value);
+    function clampByInput(value, input, fallback) {
+      const number = Number.parseInt(value, 10);
+      const min = Number.parseInt(input.min || "0", 10);
+      const max = Number.parseInt(input.max || "255", 10);
+      if (Number.isNaN(number)) return fallback;
+      return Math.min(max, Math.max(min, number));
+    }
+
+    function syncRangeFromNumber(numberInput, rangeInput, fallback) {
+      // 数字框输入过程中允许短暂为空，避免每敲一位都被脚本改写。
+      if (numberInput.value === "") return;
+      rangeInput.value = String(clampByInput(numberInput.value, numberInput, fallback));
+    }
+
+    function normalizeNumberInput(numberInput, rangeInput, fallback) {
+      const value = clampByInput(numberInput.value, numberInput, fallback);
+      numberInput.value = String(value);
+      rangeInput.value = String(value);
+    }
+
+    function syncNumberFromRange(rangeInput, numberInput) {
+      numberInput.value = rangeInput.value;
     }
 
     function readOrder() {
@@ -508,8 +526,6 @@
     }
 
     function update() {
-      syncPair(brightnessEl, brightnessNumberEl);
-      syncPair(periodEl, periodNumberEl);
       settingsStatusEl.textContent = "";
 
       const frame = buildFrame();
@@ -534,9 +550,39 @@
       saveSettings();
     }
 
-    [modeEl, colorEl, brightnessEl, brightnessNumberEl, periodEl, periodNumberEl, ...orderInputs].forEach((el) => {
+    [modeEl, colorEl, ...orderInputs].forEach((el) => {
       el.addEventListener("input", update);
       el.addEventListener("change", update);
+    });
+
+    brightnessEl.addEventListener("input", () => {
+      syncNumberFromRange(brightnessEl, brightnessNumberEl);
+      update();
+    });
+
+    brightnessNumberEl.addEventListener("input", () => {
+      syncRangeFromNumber(brightnessNumberEl, brightnessEl, defaultSettings.brightness);
+      update();
+    });
+
+    brightnessNumberEl.addEventListener("change", () => {
+      normalizeNumberInput(brightnessNumberEl, brightnessEl, defaultSettings.brightness);
+      update();
+    });
+
+    periodEl.addEventListener("input", () => {
+      syncNumberFromRange(periodEl, periodNumberEl);
+      update();
+    });
+
+    periodNumberEl.addEventListener("input", () => {
+      syncRangeFromNumber(periodNumberEl, periodEl, defaultSettings.period);
+      update();
+    });
+
+    periodNumberEl.addEventListener("change", () => {
+      normalizeNumberInput(periodNumberEl, periodEl, defaultSettings.period);
+      update();
     });
 
     document.querySelectorAll("[data-order]").forEach((button) => {
