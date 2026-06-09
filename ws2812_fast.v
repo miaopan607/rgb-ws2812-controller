@@ -6,6 +6,7 @@
 //   2. 上层按 LED0~LED7 提供 RGB 数据，本模块在发送时转换成 WS2812 的 GRB 顺序。
 //   3. 在帧间复位结束时锁存输入，保证一整帧输出期间颜色和亮度稳定。
 //   4. led_brightness 是 16 bit 全局亮度缩放参数，0 为全灭，65535 接近原始颜色。
+//   5. 缩放后的低 8 bit 小数使用帧级时间抖动，改善低亮度呼吸的台阶感。
 //==============================================================================
 module ws2812_fast(
     input          clk,              // 50 MHz 系统时钟。
@@ -35,6 +36,7 @@ reg         reset_state;             // 复位间隔状态标志，1=输出低�
 reg [191:0] led_rgb_data_latched;    // 帧起始处锁存的 RGB 数据。
 reg         mode_latched;            // 帧起始处锁存的模式控制。
 reg [15:0]  led_brightness_latched;  // 帧起始处锁存的亮度值。
+reg [7:0]   dither_phase;            // 帧级抖动相位，用于把 16 bit 缩放小数分散到多帧。
 
 //------------------------------------------------------------------------------
 // 当前发送 bit 的组合计算。
@@ -50,11 +52,17 @@ wire [5:0]  high_cycles   = current_bit ? T1H_CYCLES[5:0] : T0H_CYCLES[5:0]; // 
 function [7:0] scale_channel;
     input [7:0] channel_value; // 原始通道值。
     input [15:0] bright_value; // 全局亮度值。
+    input [7:0] dither_value;  // 当前帧抖动相位。
     reg [24:0] product;        // 乘积最大为 255*65536，保留 25 bit 避免溢出。
+    reg [7:0] base_value;      // 缩放后的整数部分。
+    reg [7:0] frac_value;      // 缩放后的小数部分，用于跨帧补 1。
     begin
         // 使用 (brightness + 1) / 65536 近似缩放，使 65535 时能输出原始通道值。
         product = channel_value * ({1'b0, bright_value} + 17'd1);
-        scale_channel = product[23:16];
+        base_value = product[23:16];
+        frac_value = product[15:8];
+        // base_value 未满 255 时才允许补 1，避免满亮通道溢出回 0。
+        scale_channel = base_value + ((base_value != 8'hFF) && (frac_value > dither_value));
     end
 endfunction
 
@@ -90,9 +98,9 @@ function [23:0] get_color;
     reg [7:0]  scaled_b;    // 缩放后的蓝色通道。
     begin
         rgb_value = mode_latched ? get_rgb(index) : 24'd0;
-        scaled_r = scale_channel(rgb_value[23:16], led_brightness_latched);
-        scaled_g = scale_channel(rgb_value[15:8], led_brightness_latched);
-        scaled_b = scale_channel(rgb_value[7:0], led_brightness_latched);
+        scaled_r = scale_channel(rgb_value[23:16], led_brightness_latched, dither_phase);
+        scaled_g = scale_channel(rgb_value[15:8], led_brightness_latched, dither_phase);
+        scaled_b = scale_channel(rgb_value[7:0], led_brightness_latched, dither_phase);
         get_color = {scaled_g, scaled_r, scaled_b};
     end
 endfunction
@@ -114,6 +122,7 @@ always @(posedge clk or negedge rst_n) begin
         led_rgb_data_latched <= 192'd0;
         mode_latched <= 1'b0;
         led_brightness_latched <= 16'd0;
+        dither_phase <= 8'd0;
     end else if (reset_state) begin
         // 帧间复位阶段: 数据线持续拉低，达到复位时间后准备发送新帧。
         led_out <= 1'b0;
@@ -126,6 +135,8 @@ always @(posedge clk or negedge rst_n) begin
             led_rgb_data_latched <= led_rgb_data;
             mode_latched <= mode;
             led_brightness_latched <= led_brightness;
+            // 每帧推进一次抖动相位，让 16 bit 小数亮度在多帧中转化成平均亮度。
+            dither_phase <= dither_phase + 8'd73;
         end else begin
             reset_cnt <= reset_cnt + 1'b1;
         end
