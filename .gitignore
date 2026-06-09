@@ -4,6 +4,11 @@
 /output_files/
 /simulation/questa/
 
+# Simulation artifacts
+/simulation/*.vvp
+/simulation/*.vcd
+/simulation/*.csv
+
 # Quartus transient/report artifacts
 *.qarlog
 *.rpt
