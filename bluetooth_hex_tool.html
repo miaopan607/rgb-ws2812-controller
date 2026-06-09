@@ -321,7 +321,7 @@
           </select>
         </div>
 
-        <div class="field">
+        <div class="field" id="colorBlock">
           <label for="color">颜色</label>
           <input id="color" type="color" value="#00ff00">
           <div class="hint" id="colorHint">RGB: 00 FF 00</div>
@@ -378,6 +378,7 @@
 
   <script>
     const modeEl = document.getElementById("mode");
+    const colorBlockEl = document.getElementById("colorBlock");
     const colorEl = document.getElementById("color");
     const colorHintEl = document.getElementById("colorHint");
     const brightnessEl = document.getElementById("brightness");
@@ -595,9 +596,11 @@
     function renderModeHints(mode) {
       const isFlow = mode === 1;
       const isBreath = mode === 2;
+      const isGradient = mode === 3;
       flowBlockEl.classList.toggle("hidden", !isFlow);
       periodBlockEl.classList.toggle("hidden", !isBreath);
-      colorEl.disabled = mode === 3;
+      colorBlockEl.classList.toggle("hidden", isGradient);
+      colorEl.disabled = isGradient;
     }
 
     function renderTable(bytes) {
