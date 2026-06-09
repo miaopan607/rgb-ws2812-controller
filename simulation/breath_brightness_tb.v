@@ -42,7 +42,7 @@ module breath_brightness_tb;
     //--------------------------------------------------------------------------
     initial begin
         csv_file = $fopen("simulation/breath_brightness.csv", "w");
-        $fwrite(csv_file, "time_ms,brightness,direction\n");
+        $fwrite(csv_file, "time_ms,brightness\n");
         $dumpfile("simulation/breath_brightness.vcd");
         $dumpvars(0, breath_brightness_tb);
 
@@ -56,11 +56,13 @@ module breath_brightness_tb;
 
         // 直接进入呼吸模式；该测试仅观察亮度序列，不验证 UART 接收器。
         dut.sys_mode = 2'd2;
-        dut.sys_color = 2'd1;
+        dut.cfg_r = 8'h00;
+        dut.cfg_g = 8'h00;
+        dut.cfg_b = 8'hff;
+        dut.cfg_brightness = 8'h40;
+        dut.cfg_period_100ms = 8'd20;
         dut.breath_step_cnt = 32'd0;
-        dut.breath_accum = 32'd0;
-        dut.dynamic_bright = 8'd0;
-        dut.breath_dir = 1'b0;
+        dut.breath_bright = 8'd0;
 
         // 推进足够长的时间，以观察多个亮度台阶变化。
         repeat (2200) tick_1ms_fast();
@@ -70,16 +72,14 @@ module breath_brightness_tb;
     end
 
     //--------------------------------------------------------------------------
-    // 亮度变化记录: dynamic_bright 改变时打印并写入 CSV。
+    // 亮度变化记录: breath_bright 改变时打印并写入 CSV。
     //--------------------------------------------------------------------------
     always @(posedge clk) begin
         #1;
-        if (rst_n && (dut.dynamic_bright !== last_bright)) begin
-            last_bright <= dut.dynamic_bright;
-            $display("%0d ms: brightness=%0d dir=%0d",
-                     sim_ms, dut.dynamic_bright, dut.breath_dir);
-            $fwrite(csv_file, "%0d,%0d,%0d\n",
-                    sim_ms, dut.dynamic_bright, dut.breath_dir);
+        if (rst_n && (dut.breath_bright !== last_bright)) begin
+            last_bright <= dut.breath_bright;
+            $display("%0d ms: brightness=%0d", sim_ms, dut.breath_bright);
+            $fwrite(csv_file, "%0d,%0d\n", sim_ms, dut.breath_bright);
         end
     end
 
@@ -108,10 +108,9 @@ endmodule
 module ws2812 (
     input        clk,              // 占位时钟输入。
     input        rst_n,            // 占位复位输入。
-    input  [7:0] led_data_in32,    // 占位颜色输入。
-    input  [7:0] led_data_in10,    // 占位颜色输入。
+    input [191:0] led_rgb_data,    // 占位 RGB 输入。
     input        mode,             // 占位模式输入。
-    input  [3:0] led_brightness,   // 占位亮度输入。
+    input  [7:0] led_brightness,   // 占位亮度输入。
     output       led_out           // 固定为低电平的占位输出。
 );
     // 保留未使用端口，避免旧测试或旧顶层引用缺失模块。

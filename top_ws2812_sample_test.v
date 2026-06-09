@@ -3,7 +3,7 @@
 // 功能说明: WS2812 快速驱动刷新速度板级测试。
 // 设计说明:
 //   1. 不使用 UART 输入，仅保留端口以匹配顶层引脚。
-//   2. led_brightness 保持固定，只周期性切换颜色数据。
+//   2. led_brightness 保持固定，只周期性切换 RGB 颜色数据。
 //   3. 若实际灯带全绿/全灭切换明显变快，说明 ws2812_fast 刷新链路正常。
 //==============================================================================
 module top_ws2812_sample_test(
@@ -27,7 +27,8 @@ reg [31:0] tick_cnt;    // 毫秒级切换计数器。
 reg        led_enable;  // 测试使能: 1=全绿, 0=全灭。
 
 wire unused_uart_rx = uart_rx; // 显式连接未使用输入，避免综合工具告警。
-wire [7:0] test_data = led_enable ? 8'b0101_0101 : 8'b0000_0000; // 每 2 bit=01 表示绿色。
+wire [23:0] test_rgb = led_enable ? 24'h00FF00 : 24'h000000; // 测试颜色: 全绿或全灭。
+wire [191:0] test_rgb_data = {8{test_rgb}}; // 8 颗 LED 使用同一测试颜色。
 
 //------------------------------------------------------------------------------
 // 周期性切换全绿/全灭测试数据。
@@ -50,8 +51,7 @@ end
 ws2812_fast u_ws2812_fast(
     .clk            (clk),
     .rst_n          (rst_n),
-    .led_data_in32  (test_data),
-    .led_data_in10  (test_data),
+    .led_rgb_data   (test_rgb_data),
     .mode           (1'b1),
     .led_brightness (8'h33),
     .led_out        (led_out)

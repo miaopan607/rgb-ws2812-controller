@@ -30,6 +30,7 @@ reg [31:0] tick_cnt;   // 毫秒级切换计数器。
 reg [7:0]  brightness; // 当前输出给 WS2812 驱动的亮度。
 
 wire unused_uart_rx = uart_rx; // 显式连接未使用输入，避免综合工具告警。
+wire [191:0] test_rgb_data = {8{24'h00FF00}}; // 8 颗 LED 固定为绿色。
 
 //------------------------------------------------------------------------------
 // 周期性递增亮度，达到最大值后回到最小值。
@@ -55,8 +56,7 @@ end
 ws2812_fast u_ws2812_fast(
     .clk            (clk),
     .rst_n          (rst_n),
-    .led_data_in32  (8'b0101_0101), // LED2、3、6、7 全部显示绿色。
-    .led_data_in10  (8'b0101_0101), // LED0、1、4、5 全部显示绿色。
+    .led_rgb_data   (test_rgb_data),
     .mode           (1'b1),
     .led_brightness (brightness),
     .led_out        (led_out)

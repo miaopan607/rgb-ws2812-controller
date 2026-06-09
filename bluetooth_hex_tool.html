@@ -1,0 +1,584 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>蓝牙彩灯 Hex 生成工具</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --line: #d8dee8;
+      --accent: #0f766e;
+      --accent-weak: #e6f5f2;
+      --danger: #b91c1c;
+      --mono: "Cascadia Mono", "Consolas", monospace;
+      --sans: "Segoe UI", "Microsoft YaHei", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      font-size: 15px;
+    }
+
+    main {
+      width: min(1120px, calc(100vw - 32px));
+      margin: 28px auto;
+      display: grid;
+      grid-template-columns: 1fr 380px;
+      gap: 16px;
+    }
+
+    h1 {
+      margin: 0 0 6px;
+      font-size: 24px;
+      font-weight: 700;
+    }
+
+    .subtitle {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 18px;
+    }
+
+    .header {
+      grid-column: 1 / -1;
+      padding: 0 2px 4px;
+    }
+
+    .section-title {
+      margin: 0 0 14px;
+      font-size: 16px;
+      font-weight: 700;
+    }
+
+    .panel-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .panel-heading .section-title {
+      margin: 0;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .field {
+      display: grid;
+      gap: 7px;
+      min-width: 0;
+    }
+
+    label {
+      font-weight: 600;
+      color: #374151;
+    }
+
+    select,
+    input[type="number"],
+    input[type="text"] {
+      width: 100%;
+      height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 0 10px;
+      background: #fff;
+      color: var(--text);
+      font: inherit;
+    }
+
+    input[type="color"] {
+      width: 100%;
+      height: 38px;
+      padding: 2px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+    }
+
+    input[type="range"] {
+      width: 100%;
+      accent-color: var(--accent);
+    }
+
+    .range-row {
+      display: grid;
+      grid-template-columns: 1fr 70px;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .hint {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    .mode-block {
+      margin-top: 14px;
+      padding-top: 14px;
+      border-top: 1px solid var(--line);
+    }
+
+    .flow-order {
+      display: grid;
+      grid-template-columns: repeat(8, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .flow-order input {
+      text-align: center;
+      font-family: var(--mono);
+    }
+
+    .quick-buttons {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    button {
+      height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 0 12px;
+      background: #fff;
+      color: var(--text);
+      font: inherit;
+      cursor: pointer;
+    }
+
+    button.primary {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: #fff;
+    }
+
+    button:hover {
+      filter: brightness(0.98);
+    }
+
+    .output {
+      display: grid;
+      gap: 14px;
+      align-content: start;
+    }
+
+    .hex-box {
+      min-height: 118px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: #111827;
+      color: #d1fae5;
+      font-family: var(--mono);
+      font-size: 18px;
+      line-height: 1.7;
+      word-break: break-word;
+      user-select: all;
+    }
+
+    .byte-table {
+      display: grid;
+      gap: 6px;
+      font-family: var(--mono);
+      font-size: 13px;
+    }
+
+    .byte-row {
+      display: grid;
+      grid-template-columns: 58px 80px 1fr;
+      gap: 8px;
+      padding: 6px 0;
+      border-bottom: 1px solid #eef1f5;
+    }
+
+    .status {
+      min-height: 22px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .error {
+      color: var(--danger);
+      font-weight: 600;
+    }
+
+    .hidden {
+      display: none;
+    }
+
+    @media (max-width: 900px) {
+      main {
+        grid-template-columns: 1fr;
+      }
+
+      .grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 560px) {
+      main {
+        width: min(100vw - 20px, 1120px);
+        margin: 16px auto;
+      }
+
+      .flow-order {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+      }
+
+      .byte-row {
+        grid-template-columns: 48px 58px 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="header">
+      <h1>蓝牙彩灯 Hex 生成工具</h1>
+      <p class="subtitle">选择参数后复制下方 17 字节 Hex，用串口工具以“HEX 发送/十六进制发送”模式发给蓝牙模块。</p>
+    </section>
+
+    <section class="panel">
+      <div class="panel-heading">
+        <h2 class="section-title">参数</h2>
+        <button type="button" id="resetButton">恢复默认</button>
+      </div>
+      <div class="status settings-status" id="settingsStatus"></div>
+      <div class="grid">
+        <div class="field">
+          <label for="mode">模式</label>
+          <select id="mode">
+            <option value="0">静态模式</option>
+            <option value="1">流水模式</option>
+            <option value="2">呼吸模式</option>
+            <option value="3">渐变模式</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label for="color">颜色</label>
+          <input id="color" type="color" value="#00ff00">
+          <div class="hint" id="colorHint">RGB: 00 FF 00</div>
+        </div>
+
+        <div class="field">
+          <label for="brightness">亮度</label>
+          <div class="range-row">
+            <input id="brightness" type="range" min="0" max="255" value="96">
+            <input id="brightnessNumber" type="number" min="0" max="255" value="96">
+          </div>
+          <div class="hint">0 为全灭，255 为最大亮度。</div>
+        </div>
+
+        <div class="field" id="periodBlock">
+          <label for="period">呼吸周期</label>
+          <div class="range-row">
+            <input id="period" type="range" min="1" max="255" value="20">
+            <input id="periodNumber" type="number" min="1" max="255" value="20">
+          </div>
+          <div class="hint">单位 100ms，20 表示 2 秒完整呼吸周期。</div>
+        </div>
+      </div>
+
+      <div class="mode-block" id="flowBlock">
+        <h2 class="section-title">流水灯序</h2>
+        <div class="flow-order" id="flowOrder"></div>
+        <div class="quick-buttons">
+          <button type="button" data-order="0,1,2,3,4,5,6,7">正序</button>
+          <button type="button" data-order="7,6,5,4,3,2,1,0">反序</button>
+          <button type="button" data-order="0,2,4,6,1,3,5,7">先偶后奇</button>
+          <button type="button" data-order="0,4,1,5,2,6,3,7">交错</button>
+        </div>
+        <div class="hint">必须填 0~7，且每个编号只能出现一次。</div>
+      </div>
+    </section>
+
+    <aside class="panel output">
+      <h2 class="section-title">可发送 Hex</h2>
+      <div class="hex-box" id="hexOutput"></div>
+      <div class="status" id="status"></div>
+      <div class="quick-buttons">
+        <button class="primary" type="button" id="copyButton">复制带空格 Hex</button>
+        <button type="button" id="copyCompactButton">复制不带空格 Hex</button>
+      </div>
+
+      <div>
+        <h2 class="section-title">字段预览</h2>
+        <div class="byte-table" id="byteTable"></div>
+      </div>
+    </aside>
+  </main>
+
+  <script>
+    const modeEl = document.getElementById("mode");
+    const colorEl = document.getElementById("color");
+    const colorHintEl = document.getElementById("colorHint");
+    const brightnessEl = document.getElementById("brightness");
+    const brightnessNumberEl = document.getElementById("brightnessNumber");
+    const periodEl = document.getElementById("period");
+    const periodNumberEl = document.getElementById("periodNumber");
+    const flowBlockEl = document.getElementById("flowBlock");
+    const periodBlockEl = document.getElementById("periodBlock");
+    const flowOrderEl = document.getElementById("flowOrder");
+    const hexOutputEl = document.getElementById("hexOutput");
+    const statusEl = document.getElementById("status");
+    const settingsStatusEl = document.getElementById("settingsStatus");
+    const byteTableEl = document.getElementById("byteTable");
+    const copyButtonEl = document.getElementById("copyButton");
+    const copyCompactButtonEl = document.getElementById("copyCompactButton");
+    const resetButtonEl = document.getElementById("resetButton");
+    const storageKey = "rgbBluetoothHexToolSettings";
+    const defaultSettings = {
+      mode: "1",
+      color: "#00ff00",
+      brightness: "96",
+      period: "20",
+      order: ["0", "1", "2", "3", "4", "5", "6", "7"]
+    };
+
+    const labels = [
+      "帧头", "帧头", "模式", "R", "G", "B", "亮度", "周期",
+      "灯序0", "灯序1", "灯序2", "灯序3", "灯序4", "灯序5", "灯序6", "灯序7", "校验"
+    ];
+
+    // 初始化 8 个灯序输入框，避免手写重复 DOM。
+    for (let index = 0; index < 8; index += 1) {
+      const field = document.createElement("div");
+      field.className = "field";
+      const label = document.createElement("label");
+      label.textContent = `第 ${index + 1} 步`;
+      label.setAttribute("for", `order${index}`);
+      const input = document.createElement("input");
+      input.id = `order${index}`;
+      input.type = "number";
+      input.min = "0";
+      input.max = "7";
+      input.value = String(index);
+      input.dataset.orderInput = "true";
+      field.append(label, input);
+      flowOrderEl.appendChild(field);
+    }
+
+    const orderInputs = Array.from(document.querySelectorAll("[data-order-input='true']"));
+
+    function clampByte(value, fallback) {
+      const number = Number.parseInt(value, 10);
+      if (Number.isNaN(number)) return fallback;
+      return Math.min(255, Math.max(0, number));
+    }
+
+    function toHex(value) {
+      return clampByte(value, 0).toString(16).toUpperCase().padStart(2, "0");
+    }
+
+    function parseColor(hexColor) {
+      const clean = hexColor.replace("#", "");
+      return [
+        Number.parseInt(clean.slice(0, 2), 16),
+        Number.parseInt(clean.slice(2, 4), 16),
+        Number.parseInt(clean.slice(4, 6), 16)
+      ];
+    }
+
+    function syncPair(source, target) {
+      const value = clampByte(source.value, 0);
+      source.value = String(value);
+      target.value = String(value);
+    }
+
+    function readOrder() {
+      return orderInputs.map((input) => clampByte(input.value, 0));
+    }
+
+    function validateOrder(order) {
+      const seen = new Set(order);
+      return order.every((value) => value >= 0 && value <= 7) && seen.size === 8;
+    }
+
+    function readSettings() {
+      return {
+        mode: modeEl.value,
+        color: colorEl.value,
+        brightness: brightnessEl.value,
+        period: periodEl.value,
+        order: orderInputs.map((input) => input.value)
+      };
+    }
+
+    function applySettings(settings) {
+      // 所有默认值和恢复值都走同一入口，避免控件状态不一致。
+      modeEl.value = settings.mode;
+      colorEl.value = settings.color;
+      brightnessEl.value = settings.brightness;
+      brightnessNumberEl.value = settings.brightness;
+      periodEl.value = settings.period;
+      periodNumberEl.value = settings.period;
+      settings.order.slice(0, 8).forEach((value, index) => {
+        orderInputs[index].value = value;
+      });
+    }
+
+    function saveSettings() {
+      // 把表单状态保存到浏览器本地存储，方便下次打开页面自动恢复。
+      localStorage.setItem(storageKey, JSON.stringify(readSettings()));
+    }
+
+    function loadSettings() {
+      const raw = localStorage.getItem(storageKey);
+      if (!raw) return;
+
+      try {
+        const settings = JSON.parse(raw);
+        applySettings({
+          mode: settings.mode ?? defaultSettings.mode,
+          color: settings.color ?? defaultSettings.color,
+          brightness: settings.brightness ?? defaultSettings.brightness,
+          period: settings.period ?? defaultSettings.period,
+          order: Array.isArray(settings.order) ? settings.order : defaultSettings.order
+        });
+      } catch (error) {
+        localStorage.removeItem(storageKey);
+        applySettings(defaultSettings);
+      }
+    }
+
+    function buildFrame() {
+      const mode = clampByte(modeEl.value, 0);
+      const [r, g, b] = parseColor(colorEl.value);
+      const brightness = clampByte(brightnessEl.value, 0);
+      const period = Math.max(1, clampByte(periodEl.value, 20));
+      const order = readOrder();
+      const payload = [mode, r, g, b, brightness, period, ...order];
+      const checksum = payload.reduce((sum, value) => sum ^ value, 0);
+      return {
+        mode,
+        rgb: [r, g, b],
+        brightness,
+        period,
+        order,
+        checksum,
+        bytes: [0xAA, 0x55, ...payload, checksum]
+      };
+    }
+
+    function renderModeHints(mode) {
+      const isFlow = mode === 1;
+      const isBreath = mode === 2;
+      flowBlockEl.classList.toggle("hidden", !isFlow);
+      periodBlockEl.classList.toggle("hidden", !isBreath);
+      colorEl.disabled = mode === 3;
+    }
+
+    function renderTable(bytes) {
+      byteTableEl.innerHTML = "";
+      bytes.forEach((value, index) => {
+        const row = document.createElement("div");
+        row.className = "byte-row";
+        row.innerHTML = `<span>${index}</span><strong>${toHex(value)}</strong><span>${labels[index]}</span>`;
+        byteTableEl.appendChild(row);
+      });
+    }
+
+    function update() {
+      syncPair(brightnessEl, brightnessNumberEl);
+      syncPair(periodEl, periodNumberEl);
+      settingsStatusEl.textContent = "";
+
+      const frame = buildFrame();
+      const hexText = frame.bytes.map(toHex).join(" ");
+      const orderOk = validateOrder(frame.order);
+
+      renderModeHints(frame.mode);
+      colorHintEl.textContent = `RGB: ${frame.rgb.map(toHex).join(" ")}`;
+      hexOutputEl.textContent = hexText;
+      renderTable(frame.bytes);
+
+      if (!orderOk) {
+        statusEl.innerHTML = "<span class='error'>流水灯序无效：必须包含 0~7 且不能重复。</span>";
+      } else if (frame.mode === 3) {
+        statusEl.textContent = "渐变模式暂时只使用亮度字段，RGB 和周期会被板子忽略。";
+      } else {
+        statusEl.textContent = `校验字节：${toHex(frame.checksum)}`;
+      }
+
+      copyButtonEl.disabled = !orderOk;
+      copyCompactButtonEl.disabled = !orderOk;
+      saveSettings();
+    }
+
+    [modeEl, colorEl, brightnessEl, brightnessNumberEl, periodEl, periodNumberEl, ...orderInputs].forEach((el) => {
+      el.addEventListener("input", update);
+      el.addEventListener("change", update);
+    });
+
+    document.querySelectorAll("[data-order]").forEach((button) => {
+      button.addEventListener("click", () => {
+        button.dataset.order.split(",").forEach((value, index) => {
+          orderInputs[index].value = value;
+        });
+        update();
+      });
+    });
+
+    copyButtonEl.addEventListener("click", async () => {
+      const text = hexOutputEl.textContent;
+      try {
+        await navigator.clipboard.writeText(text);
+        statusEl.textContent = "已复制带空格 Hex。";
+      } catch (error) {
+        statusEl.textContent = "浏览器不允许自动复制，请手动选中 Hex 文本复制。";
+      }
+    });
+
+    copyCompactButtonEl.addEventListener("click", async () => {
+      // 部分串口工具要求连续十六进制字符串，因此复制时去掉显示用空格。
+      const text = hexOutputEl.textContent.replace(/\s+/g, "");
+      try {
+        await navigator.clipboard.writeText(text);
+        statusEl.textContent = "已复制不带空格 Hex。";
+      } catch (error) {
+        statusEl.textContent = "浏览器不允许自动复制，请手动选中 Hex 文本复制。";
+      }
+    });
+
+    resetButtonEl.addEventListener("click", () => {
+      localStorage.removeItem(storageKey);
+      applySettings(defaultSettings);
+      update();
+      settingsStatusEl.textContent = "已恢复默认配置。";
+    });
+
+    applySettings(defaultSettings);
+    loadSettings();
+    update();
+  </script>
+</body>
+</html>
