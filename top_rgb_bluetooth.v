@@ -22,12 +22,12 @@ localparam [1:0] COLOR_GREEN = 2'd1;
 localparam [1:0] COLOR_RED   = 2'd2;
 localparam [1:0] COLOR_BLUE  = 2'd3;
 
-localparam [3:0] BRIGHT_MIN = 4'd1;
-localparam [3:0] BRIGHT_MAX = 4'd3;
+localparam [7:0] BRIGHT_MIN = 8'd0;
+localparam [7:0] BRIGHT_MAX = 8'h33; // 等效原驱动 4'd3 的亮度
 
 localparam [7:0] RUN_STEP_LAST    = 8'd249; // 250ms流动一次
 localparam [7:0] GRADIENT_STEP_LAST = 8'd249; // 250ms切换一次渐变相位
-localparam [4:0] BREATH_STEP_LAST = 5'd24; // 25ms改变一次亮度
+localparam [2:0] BREATH_STEP_LAST = 3'd4; // 5ms改变一次亮度台阶
 
 wire cmd_is_flow   = rx_done && (rx_data[7:4] == 4'h1);
 wire cmd_is_breath = rx_done && (rx_data[7:4] == 4'h2);
@@ -138,24 +138,24 @@ end
 // end
 
 //==================== 2. 呼吸灯亮度控制 (解耦设计) ====================
-reg [4:0]  breath_cnt;    // 呼吸节奏计数器
-reg [3:0]  dynamic_bright;// 动态亮度 (1~BRIGHT_MAX)
+reg [2:0]  breath_cnt;    // 呼吸节奏计数器
+reg [7:0]  dynamic_bright;// 动态亮度 (0~BRIGHT_MAX)
 reg        breath_dir;    // 0:变亮, 1:变暗
 
 always @(posedge clk or negedge rst_n) begin
     if(!rst_n) begin
-        breath_cnt <= 5'd0;
+        breath_cnt <= 3'd0;
         dynamic_bright <= BRIGHT_MAX;
         breath_dir <= 1'b0;
     end else if(cmd_is_breath) begin
-        breath_cnt <= 5'd0;
+        breath_cnt <= 3'd0;
         dynamic_bright <= BRIGHT_MIN;
         breath_dir <= 1'b0;
     end else if(tick_1ms) begin
         if(sys_mode == MODE_BREATH) begin // 仅在呼吸模式下生效
             breath_cnt <= breath_cnt + 1'b1;
             if(breath_cnt == BREATH_STEP_LAST) begin
-                breath_cnt <= 5'd0;
+                breath_cnt <= 3'd0;
                 if(!breath_dir) begin
                     if(dynamic_bright < BRIGHT_MAX) dynamic_bright <= dynamic_bright + 1'b1;
                     else breath_dir <= 1'b1;
@@ -165,7 +165,7 @@ always @(posedge clk or negedge rst_n) begin
                 end
             end
         end else begin
-            breath_cnt <= 5'd0;
+            breath_cnt <= 3'd0;
             breath_dir <= 1'b0;
             dynamic_bright <= BRIGHT_MAX; // 非呼吸模式使用限幅后的常亮亮度
         end
@@ -263,14 +263,14 @@ uart_rx_module u_uart_rx(
     .rx_done    (rx_done)
 );
 
-// 原始提供的 WS2812 灰盒模块 (固定为Mode 1: 彩色模式)
-ws2812 u_ws2812(
+// 自定义快速 WS2812 驱动 (固定为Mode 1: 彩色模式)
+ws2812_fast u_ws2812_fast(
     .clk            (clk),
     .rst_n          (rst_n),
     .led_data_in32  (led_data_in32),
     .led_data_in10  (led_data_in10),
     .mode           (1'b1),            // 强制启用数码管彩色模式
-    .led_brightness (dynamic_bright),  // 动态亮度输入（实现呼吸效果）
+    .led_brightness (dynamic_bright),  // 动态亮度输入（实现平滑呼吸效果）
     .led_out        (led_out)
 );
 

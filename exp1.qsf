@@ -39,7 +39,7 @@
 
 set_global_assignment -name FAMILY "Cyclone IV E"
 set_global_assignment -name DEVICE EP4CE15F17C8
-set_global_assignment -name TOP_LEVEL_ENTITY top_ws2812_sample_test
+set_global_assignment -name TOP_LEVEL_ENTITY top_rgb_bluetooth
 set_global_assignment -name ORIGINAL_QUARTUS_VERSION 24.1STD.0
 set_global_assignment -name PROJECT_CREATION_TIME_DATE "10:31:24  MAY 12, 2026"
 set_global_assignment -name LAST_QUARTUS_VERSION "24.1std.0 Lite Edition"
