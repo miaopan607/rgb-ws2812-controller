@@ -4,7 +4,7 @@
 // 设计说明:
 //   1. UART 接收手机 App 通过蓝牙串口发送的二进制控制帧。
 //   2. 整帧校验通过后一次性更新模式、RGB、亮度、呼吸周期和流水画面。
-//   3. 支持静态、流水、呼吸、渐变四种模式，参数实时应用到下一次刷新。
+//   3. 支持静态、流水、呼吸、Disco、渐变、流动渐变六种模式，参数实时应用到下一次刷新。
 //   4. 顶层统一生成 LED0~LED7 的 RGB 数据，再交给 ws2812_fast 输出 WS2812 时序。
 //==============================================================================
 module top_rgb_bluetooth(
@@ -19,10 +19,12 @@ wire [7:0] rx_data; // 接收到的 UART 字节。
 wire       rx_done; // 接收完成标志，高电平持续一个 clk 周期。
 
 //==================== 模式和协议常量 ====================
-localparam [1:0] MODE_STATIC   = 2'd0; // 静态模式：所有 LED 同色常亮。
-localparam [1:0] MODE_FLOW     = 2'd1; // 流水模式：按自定义画面掩码循环点亮。
-localparam [1:0] MODE_BREATH   = 2'd2; // 呼吸模式：所有 LED 同色亮度渐变。
-localparam [1:0] MODE_GRADIENT = 2'd3; // 渐变模式：多色空间分布并旋转相位。
+localparam [2:0] MODE_STATIC        = 3'd0; // 静态模式：所有 LED 同色常亮。
+localparam [2:0] MODE_FLOW          = 3'd1; // 流水模式：按自定义画面掩码循环点亮。
+localparam [2:0] MODE_BREATH        = 3'd2; // 呼吸模式：所有 LED 同色亮度渐变。
+localparam [2:0] MODE_DISCO         = 3'd3; // Disco 模式：板载离散三色循环。
+localparam [2:0] MODE_GRADIENT      = 3'd4; // 普通渐变：8 颗灯同色做平滑 RGB 环渐变。
+localparam [2:0] MODE_FLOW_GRADIENT = 3'd5; // 流动渐变：8 颗灯错相分布并整体流动。
 
 localparam [7:0] FRAME_HEAD0 = 8'hAA; // 固定帧头第 1 字节。
 localparam [7:0] FRAME_HEAD1 = 8'h55; // 固定帧头第 2 字节。
@@ -33,18 +35,19 @@ localparam [1:0] RX_PAYLOAD    = 2'd2; // 接收 mode 到最后一个流水画�
 localparam [1:0] RX_CHECKSUM   = 2'd3; // 接收 XOR 校验字节。
 
 localparam [7:0] RUN_STEP_LAST      = 8'd249; // 250 ms 流动一次，基于 1 ms tick。
-localparam [7:0] GRADIENT_STEP_LAST = 8'd249; // 250 ms 切换一次渐变相位，基于 1 ms tick。
 localparam [7:0] DEFAULT_BRIGHTNESS = 8'h11;  // 默认亮度，避免复位后过亮。
 localparam [3:0] BASE_PAYLOAD_LAST  = 4'd6;   // payload 第 6 字节为 flow_count。
 localparam [3:0] FLOW_FRAME_MAX     = 4'd8;   // 高级流水最多 8 个画面。
+localparam [10:0] GRADIENT_PHASE_COUNT = 11'd1536; // 一轮六段平滑渐变共 1536 个相位。
+localparam [10:0] FLOW_GRADIENT_OFFSET = 11'd192;  // 8 颗灯均匀错相。
 
 //==================== 配置寄存器 ====================
-reg [1:0] sys_mode;           // 当前系统模式。
+reg [2:0] sys_mode;           // 当前系统模式。
 reg [7:0] cfg_r;              // App 下发的红色通道。
 reg [7:0] cfg_g;              // App 下发的绿色通道。
 reg [7:0] cfg_b;              // App 下发的蓝色通道。
 reg [7:0] cfg_brightness;     // 静态、流水、渐变模式使用的全局亮度。
-reg [7:0] cfg_period_100ms;   // 呼吸完整周期，单位 100 ms，0 会按 1 处理。
+reg [7:0] cfg_period_100ms;   // 周期字段原始值；呼吸模式单位 100 ms，渐变模式单位 50 ms。
 reg [3:0] cfg_flow_count;     // 当前流水画面数量，范围 1~8。
 reg [7:0] flow_frame0;        // 流水第 0 个画面，bit0~bit7 对应 LED0~LED7。
 reg [7:0] flow_frame1;        // 流水第 1 个画面，bit0~bit7 对应 LED0~LED7。
@@ -64,7 +67,7 @@ reg [7:0] tmp_r;               // 暂存红色通道。
 reg [7:0] tmp_g;               // 暂存绿色通道。
 reg [7:0] tmp_b;               // 暂存蓝色通道。
 reg [7:0] tmp_brightness;      // 暂存亮度字段。
-reg [7:0] tmp_period;          // 暂存呼吸周期字段。
+reg [7:0] tmp_period;          // 暂存周期字段。
 reg [7:0] tmp_flow_count;      // 暂存流水画面数量。
 reg [7:0] tmp_flow_frame0;     // 暂存流水第 0 个画面。
 reg [7:0] tmp_flow_frame1;     // 暂存流水第 1 个画面。
@@ -76,7 +79,7 @@ reg [7:0] tmp_flow_frame6;     // 暂存流水第 6 个画面。
 reg [7:0] tmp_flow_frame7;     // 暂存流水第 7 个画面。
 
 wire frame_checksum_ok = (rx_data == checksum_accum);                         // 当前校验字节是否匹配 payload XOR。
-wire frame_mode_ok = (tmp_mode <= 8'd3);                                       // 模式字段是否合法。
+wire frame_mode_ok = (tmp_mode <= 8'd5);                                       // 模式字段是否合法。
 wire frame_flow_count_ok = (tmp_flow_count >= 8'd1) && (tmp_flow_count <= 8'd8); // 流水画面数量必须为 1~8。
 wire frame_accept = frame_checksum_ok && frame_mode_ok && frame_flow_count_ok;  // 整帧是否允许应用。
 
@@ -111,17 +114,55 @@ function [7:0] get_flow_frame;
 endfunction
 
 //------------------------------------------------------------------------------
-// 函数: gradient_rgb
-// 功能: 根据逻辑位置返回渐变模式的基础 RGB 颜色。
+// 函数: disco_rgb
+// 功能: 保留原 mode=3 的离散三色循环，用于 Disco 模式。
 //------------------------------------------------------------------------------
-function [23:0] gradient_rgb;
-    input [2:0] pos; // 渐变位置，3 bit 溢出自然形成循环。
+function [23:0] disco_rgb;
+    input [2:0] pos; // 逻辑位置，3 bit 溢出自然形成循环。
     begin
         case(pos)
-            3'd0, 3'd3, 3'd6: gradient_rgb = 24'h00FF00; // 绿色。
-            3'd1, 3'd4, 3'd7: gradient_rgb = 24'hFF0000; // 红色。
-            default:          gradient_rgb = 24'h0000FF; // 蓝色。
+            3'd0, 3'd3, 3'd6: disco_rgb = 24'h00FF00; // 绿色。
+            3'd1, 3'd4, 3'd7: disco_rgb = 24'hFF0000; // 红色。
+            default:          disco_rgb = 24'h0000FF; // 蓝色。
         endcase
+    end
+endfunction
+
+//------------------------------------------------------------------------------
+// 函数: gradient_cycle_rgb
+// 功能: 根据 0~1535 相位生成平滑 RGB 环渐变颜色。
+//------------------------------------------------------------------------------
+function [23:0] gradient_cycle_rgb;
+    input [10:0] phase; // 完整渐变环相位。
+    reg [7:0] offset;
+    begin
+        offset = phase[7:0];
+        case(phase / 11'd256)
+            3'd0: gradient_cycle_rgb = {8'hFF, offset, 8'h00};
+            3'd1: gradient_cycle_rgb = {8'hFF - offset, 8'hFF, 8'h00};
+            3'd2: gradient_cycle_rgb = {8'h00, 8'hFF, offset};
+            3'd3: gradient_cycle_rgb = {8'h00, 8'hFF - offset, 8'hFF};
+            3'd4: gradient_cycle_rgb = {offset, 8'h00, 8'hFF};
+            default: gradient_cycle_rgb = {8'hFF, 8'h00, 8'hFF - offset};
+        endcase
+    end
+endfunction
+
+//------------------------------------------------------------------------------
+// 函数: add_gradient_phase
+// 功能: 对渐变相位做回绕加法。
+//------------------------------------------------------------------------------
+function [10:0] add_gradient_phase;
+    input [10:0] base_phase;
+    input [10:0] offset_phase;
+    reg [11:0] sum_phase;
+    begin
+        sum_phase = {1'b0, base_phase} + {1'b0, offset_phase};
+        if(sum_phase >= GRADIENT_PHASE_COUNT) begin
+            add_gradient_phase = sum_phase - GRADIENT_PHASE_COUNT;
+        end else begin
+            add_gradient_phase = sum_phase[10:0];
+        end
     end
 endfunction
 
@@ -244,7 +285,7 @@ always @(posedge clk or negedge rst_n) begin
         flow_frame6 <= 8'b0100_0000;
         flow_frame7 <= 8'b1000_0000;
     end else if(rx_done && (rx_state == RX_CHECKSUM) && frame_accept) begin
-        sys_mode <= tmp_mode[1:0];
+        sys_mode <= tmp_mode[2:0];
         cfg_r <= tmp_r;
         cfg_g <= tmp_g;
         cfg_b <= tmp_b;
@@ -289,7 +330,7 @@ always @(posedge clk or negedge rst_n) begin
     if(!rst_n) begin
         breath_step_cnt <= 32'd0;
         breath_bright <= 16'd0;
-    end else if(frame_applied && (tmp_mode[1:0] == MODE_BREATH)) begin
+    end else if(frame_applied && (tmp_mode[2:0] == MODE_BREATH)) begin
         // 新呼吸参数下发后从最暗处重新开始，便于手机端看到参数立即生效。
         breath_step_cnt <= 32'd0;
         breath_bright <= 16'd0;
@@ -312,33 +353,47 @@ end
 //==================== 4. 颜色阵列与灯效逻辑 ====================
 reg [7:0]   run_cnt;        // 流水速度计数器，基于 1 ms tick。
 reg [2:0]   run_pos;        // 当前流水画面位置。
-reg [7:0]   gradient_cnt;   // 渐变速度计数器，基于 1 ms tick。
-reg [2:0]   gradient_phase; // 当前渐变相位，3 bit 溢出自然循环。
+reg [31:0]  gradient_step_cnt; // 当前完整渐变周期内的 1 ms 节拍计数。
+reg [7:0]   disco_cnt;         // Disco 速度计数器，基于 1 ms tick。
+reg [2:0]   disco_phase;       // Disco 当前离散相位。
+reg [10:0]  gradient_phase;    // 当前渐变相位，范围 0~1535。
 reg [191:0] led_rgb_data;   // 输出给 ws2812_fast 的 8 颗 LED RGB 数据。
 
 wire [23:0] cfg_rgb = {cfg_r, cfg_g, cfg_b};               // 当前 App 下发的基础 RGB 颜色。
 wire [7:0]  active_flow_frame = get_flow_frame(run_pos);   // 流水当前画面的 8 bit 灯掩码。
 wire [3:0]  flow_last_pos = cfg_flow_count - 1'b1;         // 当前流水最后一个有效画面位置。
 wire [15:0] output_brightness = (sys_mode == MODE_BREATH) ? breath_bright : {cfg_brightness, cfg_brightness};
+wire [15:0] gradient_period_ms = {cfg_period_100ms, 5'b0} + {cfg_period_100ms, 4'b0} + {cfg_period_100ms, 1'b0}; // period * 50。
+wire [15:0] gradient_period_safe = (gradient_period_ms < 16'd1) ? 16'd1 : gradient_period_ms;
+wire [31:0] gradient_step_next = gradient_step_cnt + 1'b1;
+wire [31:0] gradient_phase_numer = gradient_step_next * GRADIENT_PHASE_COUNT;
+wire [10:0] gradient_phase_calc = gradient_phase_numer / gradient_period_safe;
 
 always @(posedge clk or negedge rst_n) begin
     if(!rst_n) begin
         run_cnt <= 8'd0;
         run_pos <= 3'd0;
-        gradient_cnt <= 8'd0;
-        gradient_phase <= 3'd0;
+        gradient_step_cnt <= 32'd0;
+        disco_cnt <= 8'd0;
+        disco_phase <= 3'd0;
+        gradient_phase <= 11'd0;
         led_rgb_data <= 192'd0;
     end else begin
         if(frame_applied) begin
             // 模式或参数更新后重置动画相位，让手机端每次下发都从确定状态开始。
             run_cnt <= 8'd0;
             run_pos <= 3'd0;
-            gradient_cnt <= 8'd0;
-            gradient_phase <= 3'd0;
+            gradient_step_cnt <= 32'd0;
+            disco_cnt <= 8'd0;
+            disco_phase <= 3'd0;
+            gradient_phase <= 11'd0;
         end else if(tick_1ms) begin
             case(sys_mode)
                 MODE_FLOW: begin
-                    gradient_cnt <= 8'd0;
+                    gradient_step_cnt <= 32'd0;
+                    disco_cnt <= 8'd0;
+                    disco_phase <= 3'd0;
+                    gradient_phase <= 11'd0;
                     if(run_cnt == RUN_STEP_LAST) begin
                         run_cnt <= 8'd0;
                         // 按已下发画面数量回绕，基础流水和高级流水共用同一套底层协议。
@@ -351,18 +406,36 @@ always @(posedge clk or negedge rst_n) begin
                         run_cnt <= run_cnt + 1'b1;
                     end
                 end
-                MODE_GRADIENT: begin
+                MODE_DISCO: begin
                     run_cnt <= 8'd0;
-                    if(gradient_cnt == GRADIENT_STEP_LAST) begin
-                        gradient_cnt <= 8'd0;
-                        gradient_phase <= gradient_phase + 1'b1;
+                    gradient_step_cnt <= 32'd0;
+                    gradient_phase <= 11'd0;
+                    if(disco_cnt == RUN_STEP_LAST) begin
+                        disco_cnt <= 8'd0;
+                        disco_phase <= disco_phase + 1'b1;
                     end else begin
-                        gradient_cnt <= gradient_cnt + 1'b1;
+                        disco_cnt <= disco_cnt + 1'b1;
+                    end
+                end
+                MODE_GRADIENT,
+                MODE_FLOW_GRADIENT: begin
+                    run_cnt <= 8'd0;
+                    disco_cnt <= 8'd0;
+                    disco_phase <= 3'd0;
+                    if(gradient_step_cnt >= (gradient_period_safe - 1'b1)) begin
+                        gradient_step_cnt <= 32'd0;
+                        gradient_phase <= 11'd0;
+                    end else begin
+                        gradient_step_cnt <= gradient_step_cnt + 1'b1;
+                        gradient_phase <= gradient_phase_calc;
                     end
                 end
                 default: begin
                     run_cnt <= 8'd0;
-                    gradient_cnt <= 8'd0;
+                    gradient_step_cnt <= 32'd0;
+                    disco_cnt <= 8'd0;
+                    disco_phase <= 3'd0;
+                    gradient_phase <= 11'd0;
                 end
             endcase
         end
@@ -386,16 +459,40 @@ always @(posedge clk or negedge rst_n) begin
             MODE_BREATH: begin
                 led_rgb_data <= pack_rgb8(cfg_rgb, cfg_rgb, cfg_rgb, cfg_rgb, cfg_rgb, cfg_rgb, cfg_rgb, cfg_rgb);
             end
+            MODE_DISCO: begin
+                led_rgb_data <= pack_rgb8(
+                    disco_rgb(disco_phase + 3'd0),
+                    disco_rgb(disco_phase + 3'd1),
+                    disco_rgb(disco_phase + 3'd2),
+                    disco_rgb(disco_phase + 3'd3),
+                    disco_rgb(disco_phase + 3'd4),
+                    disco_rgb(disco_phase + 3'd5),
+                    disco_rgb(disco_phase + 3'd6),
+                    disco_rgb(disco_phase + 3'd7)
+                );
+            end
+            MODE_GRADIENT: begin
+                led_rgb_data <= pack_rgb8(
+                    gradient_cycle_rgb(gradient_phase),
+                    gradient_cycle_rgb(gradient_phase),
+                    gradient_cycle_rgb(gradient_phase),
+                    gradient_cycle_rgb(gradient_phase),
+                    gradient_cycle_rgb(gradient_phase),
+                    gradient_cycle_rgb(gradient_phase),
+                    gradient_cycle_rgb(gradient_phase),
+                    gradient_cycle_rgb(gradient_phase)
+                );
+            end
             default: begin
                 led_rgb_data <= pack_rgb8(
-                    gradient_rgb(gradient_phase + 3'd0),
-                    gradient_rgb(gradient_phase + 3'd1),
-                    gradient_rgb(gradient_phase + 3'd2),
-                    gradient_rgb(gradient_phase + 3'd3),
-                    gradient_rgb(gradient_phase + 3'd4),
-                    gradient_rgb(gradient_phase + 3'd5),
-                    gradient_rgb(gradient_phase + 3'd6),
-                    gradient_rgb(gradient_phase + 3'd7)
+                    gradient_cycle_rgb(add_gradient_phase(gradient_phase, 11'd0)),
+                    gradient_cycle_rgb(add_gradient_phase(gradient_phase, FLOW_GRADIENT_OFFSET)),
+                    gradient_cycle_rgb(add_gradient_phase(gradient_phase, FLOW_GRADIENT_OFFSET * 2)),
+                    gradient_cycle_rgb(add_gradient_phase(gradient_phase, FLOW_GRADIENT_OFFSET * 3)),
+                    gradient_cycle_rgb(add_gradient_phase(gradient_phase, FLOW_GRADIENT_OFFSET * 4)),
+                    gradient_cycle_rgb(add_gradient_phase(gradient_phase, FLOW_GRADIENT_OFFSET * 5)),
+                    gradient_cycle_rgb(add_gradient_phase(gradient_phase, FLOW_GRADIENT_OFFSET * 6)),
+                    gradient_cycle_rgb(add_gradient_phase(gradient_phase, FLOW_GRADIENT_OFFSET * 7))
                 );
             end
         endcase

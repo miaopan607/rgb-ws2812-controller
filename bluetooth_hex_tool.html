@@ -405,7 +405,9 @@
             <option value="0">静态模式</option>
             <option value="1">流水模式</option>
             <option value="2">呼吸模式</option>
-            <option value="3">渐变模式</option>
+            <option value="3">Disco 模式</option>
+            <option value="4">渐变模式</option>
+            <option value="5">流动渐变模式</option>
           </select>
         </div>
 
@@ -425,12 +427,12 @@
         </div>
 
         <div class="field" id="periodBlock">
-          <label for="period">呼吸周期</label>
+          <label for="period" id="periodLabel">周期</label>
           <div class="range-row">
             <input id="period" type="range" min="1" max="255" value="20">
             <input id="periodNumber" type="number" min="1" max="255" value="20">
           </div>
-          <div class="hint">单位 100ms，20 表示 2 秒完整呼吸周期。</div>
+          <div class="hint" id="periodHint">呼吸模式单位 100ms，20 表示 2 秒完整呼吸周期。</div>
         </div>
       </div>
 
@@ -490,6 +492,8 @@
     const brightnessNumberEl = document.getElementById("brightnessNumber");
     const periodEl = document.getElementById("period");
     const periodNumberEl = document.getElementById("periodNumber");
+    const periodLabelEl = document.getElementById("periodLabel");
+    const periodHintEl = document.getElementById("periodHint");
     const flowBlockEl = document.getElementById("flowBlock");
     const periodBlockEl = document.getElementById("periodBlock");
     const flowOrderEl = document.getElementById("flowOrder");
@@ -771,11 +775,22 @@
     function renderModeHints(mode) {
       const isFlow = mode === 1;
       const isBreath = mode === 2;
-      const isGradient = mode === 3;
+      const isDisco = mode === 3;
+      const isGradientFamily = mode === 4 || mode === 5;
       flowBlockEl.classList.toggle("hidden", !isFlow);
-      periodBlockEl.classList.toggle("hidden", !isBreath);
-      colorBlockEl.classList.toggle("hidden", isGradient);
-      colorEl.disabled = isGradient;
+      periodBlockEl.classList.toggle("hidden", !(isBreath || isGradientFamily));
+      colorBlockEl.classList.toggle("hidden", isDisco || isGradientFamily);
+      colorEl.disabled = isDisco || isGradientFamily;
+      if (isBreath) {
+        periodLabelEl.textContent = "呼吸周期";
+        periodHintEl.textContent = "单位 100ms，20 表示 2 秒完整呼吸周期。";
+      } else if (isGradientFamily) {
+        periodLabelEl.textContent = "渐变周期";
+        periodHintEl.textContent = "单位 50ms，20 表示 1 秒完整渐变周期。";
+      } else {
+        periodLabelEl.textContent = "周期";
+        periodHintEl.textContent = "当前模式不使用该字段。";
+      }
     }
 
     function byteLabel(index, bytes) {
@@ -818,7 +833,9 @@
       if (frame.mode === 1 && !orderOk) {
         statusEl.innerHTML = "<span class='error'>基础流水灯序未点满；可继续使用高级画面发送，或点击“用基础灯序生成”。</span>";
       } else if (frame.mode === 3) {
-        statusEl.textContent = "渐变模式暂时只使用亮度字段，RGB 和周期会被板子忽略。";
+        statusEl.textContent = "Disco 模式使用板子内置的离散三色循环，RGB 和周期会被板子忽略。";
+      } else if (frame.mode === 4 || frame.mode === 5) {
+        statusEl.textContent = `渐变周期：${frame.period * 50}ms，画面数：${frame.frames.length}，校验字节：${toHex(frame.checksum)}`;
       } else {
         statusEl.textContent = `画面数：${frame.frames.length}，校验字节：${toHex(frame.checksum)}`;
       }
