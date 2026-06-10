@@ -577,6 +577,18 @@
       timingSettings[key] = periodEl.value;
     }
 
+    function resolveTimingSettings(settings) {
+      const legacyPeriodKey = activePeriodKey(clampByte(settings.mode ?? defaultSettings.mode, 1));
+      const legacyPeriod = settings.period;
+      const legacyPeriodFor = (key, fallback) => legacyPeriodKey === key && legacyPeriod !== undefined ? legacyPeriod : fallback;
+      // 旧版只有一个 period 字段时，只回填当时选中的模式，避免不同单位的周期互相污染。
+      return {
+        flowInterval: settings.flowInterval ?? legacyPeriodFor("flowInterval", defaultSettings.flowInterval),
+        breathPeriod: settings.breathPeriod ?? legacyPeriodFor("breathPeriod", defaultSettings.breathPeriod),
+        gradientPeriod: settings.gradientPeriod ?? legacyPeriodFor("gradientPeriod", defaultSettings.gradientPeriod)
+      };
+    }
+
     function clampByte(value, fallback) {
       const number = Number.parseInt(value, 10);
       if (Number.isNaN(number)) return fallback;
@@ -748,11 +760,7 @@
       colorEl.value = settings.color;
       brightnessEl.value = settings.brightness;
       brightnessNumberEl.value = settings.brightness;
-      timingSettings = {
-        flowInterval: settings.flowInterval ?? settings.period ?? defaultSettings.flowInterval,
-        breathPeriod: settings.breathPeriod ?? settings.period ?? defaultSettings.breathPeriod,
-        gradientPeriod: settings.gradientPeriod ?? settings.period ?? defaultSettings.gradientPeriod
-      };
+      timingSettings = resolveTimingSettings(settings);
       const activePeriod = activePeriodValue(clampByte(settings.mode, 1));
       periodEl.value = activePeriod;
       periodNumberEl.value = activePeriod;
@@ -775,9 +783,10 @@
           mode: settings.mode ?? defaultSettings.mode,
           color: settings.color ?? defaultSettings.color,
           brightness: settings.brightness ?? defaultSettings.brightness,
-          flowInterval: settings.flowInterval ?? settings.period ?? defaultSettings.flowInterval,
-          breathPeriod: settings.breathPeriod ?? settings.period ?? defaultSettings.breathPeriod,
-          gradientPeriod: settings.gradientPeriod ?? settings.period ?? defaultSettings.gradientPeriod,
+          period: settings.period,
+          flowInterval: settings.flowInterval,
+          breathPeriod: settings.breathPeriod,
+          gradientPeriod: settings.gradientPeriod,
           order: Array.isArray(settings.order) ? settings.order : defaultSettings.order,
           flowFrames: Array.isArray(settings.flowFrames) ? settings.flowFrames : null
         });

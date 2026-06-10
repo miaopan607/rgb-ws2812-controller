@@ -366,9 +366,11 @@ wire [15:0] flow_period_ms = {cfg_period_units, 3'b000} + {cfg_period_units, 1'b
 wire [15:0] flow_period_safe = (flow_period_ms < 16'd1) ? 16'd1 : flow_period_ms;
 wire [15:0] gradient_period_ms = {cfg_period_units, 5'b0} + {cfg_period_units, 4'b0} + {cfg_period_units, 1'b0}; // period * 50。
 wire [15:0] gradient_period_safe = (gradient_period_ms < 16'd1) ? 16'd1 : gradient_period_ms;
+wire [31:0] gradient_step_last = gradient_period_safe - 1'b1;
 wire [31:0] gradient_step_next = gradient_step_cnt + 1'b1;
-wire [31:0] gradient_phase_numer = gradient_step_next * GRADIENT_PHASE_COUNT;
-wire [10:0] gradient_phase_calc = gradient_phase_numer / gradient_period_safe;
+wire [31:0] gradient_phase_numer = gradient_step_next * (GRADIENT_PHASE_COUNT - 1'b1);
+wire [31:0] gradient_phase_denom = (gradient_step_last < 32'd1) ? 32'd1 : gradient_step_last;
+wire [10:0] gradient_phase_calc = gradient_phase_numer / gradient_phase_denom;
 
 always @(posedge clk or negedge rst_n) begin
     if(!rst_n) begin
@@ -423,7 +425,8 @@ always @(posedge clk or negedge rst_n) begin
                     run_cnt <= 12'd0;
                     disco_cnt <= 8'd0;
                     disco_phase <= 3'd0;
-                    if(gradient_step_cnt >= (gradient_period_safe - 1'b1)) begin
+                    // step 0 和最后一个 step 分别映射到 RGB 环首尾，避免回绕前跳过尾段。
+                    if(gradient_step_cnt >= gradient_step_last) begin
                         gradient_step_cnt <= 32'd0;
                         gradient_phase <= 11'd0;
                     end else begin
