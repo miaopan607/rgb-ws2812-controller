@@ -1,9 +1,9 @@
 //==============================================================================
 // 模块名称: top_rgb_bluetooth
-// 功能说明: 基于蓝牙 UART 固定帧协议控制的 8 路 WS2812 RGB 彩灯顶层系统。
+// 功能说明: 基于蓝牙 UART 可变长度帧协议控制的 8 路 WS2812 RGB 彩灯顶层系统。
 // 设计说明:
-//   1. UART 接收手机 App 通过蓝牙串口发送的 17 字节二进制控制帧。
-//   2. 整帧校验通过后一次性更新模式、RGB、亮度、呼吸周期和流水灯序。
+//   1. UART 接收手机 App 通过蓝牙串口发送的二进制控制帧。
+//   2. 整帧校验通过后一次性更新模式、RGB、亮度、呼吸周期和流水画面。
 //   3. 支持静态、流水、呼吸、渐变四种模式，参数实时应用到下一次刷新。
 //   4. 顶层统一生成 LED0~LED7 的 RGB 数据，再交给 ws2812_fast 输出 WS2812 时序。
 //==============================================================================
@@ -20,7 +20,7 @@ wire       rx_done; // 接收完成标志，高电平持续一个 clk 周期。
 
 //==================== 模式和协议常量 ====================
 localparam [1:0] MODE_STATIC   = 2'd0; // 静态模式：所有 LED 同色常亮。
-localparam [1:0] MODE_FLOW     = 2'd1; // 流水模式：单颗 LED 沿自定义灯序移动。
+localparam [1:0] MODE_FLOW     = 2'd1; // 流水模式：按自定义画面掩码循环点亮。
 localparam [1:0] MODE_BREATH   = 2'd2; // 呼吸模式：所有 LED 同色亮度渐变。
 localparam [1:0] MODE_GRADIENT = 2'd3; // 渐变模式：多色空间分布并旋转相位。
 
@@ -29,12 +29,14 @@ localparam [7:0] FRAME_HEAD1 = 8'h55; // 固定帧头第 2 字节。
 
 localparam [1:0] RX_WAIT_HEAD0 = 2'd0; // 等待 0xAA。
 localparam [1:0] RX_WAIT_HEAD1 = 2'd1; // 等待 0x55。
-localparam [1:0] RX_PAYLOAD    = 2'd2; // 接收 mode 到 flow_order7。
+localparam [1:0] RX_PAYLOAD    = 2'd2; // 接收 mode 到最后一个流水画面。
 localparam [1:0] RX_CHECKSUM   = 2'd3; // 接收 XOR 校验字节。
 
 localparam [7:0] RUN_STEP_LAST      = 8'd249; // 250 ms 流动一次，基于 1 ms tick。
 localparam [7:0] GRADIENT_STEP_LAST = 8'd249; // 250 ms 切换一次渐变相位，基于 1 ms tick。
 localparam [7:0] DEFAULT_BRIGHTNESS = 8'h11;  // 默认亮度，避免复位后过亮。
+localparam [3:0] BASE_PAYLOAD_LAST  = 4'd6;   // payload 第 6 字节为 flow_count。
+localparam [3:0] FLOW_FRAME_MAX     = 4'd8;   // 高级流水最多 8 个画面。
 
 //==================== 配置寄存器 ====================
 reg [1:0] sys_mode;           // 当前系统模式。
@@ -43,41 +45,40 @@ reg [7:0] cfg_g;              // App 下发的绿色通道。
 reg [7:0] cfg_b;              // App 下发的蓝色通道。
 reg [7:0] cfg_brightness;     // 静态、流水、渐变模式使用的全局亮度。
 reg [7:0] cfg_period_100ms;   // 呼吸完整周期，单位 100 ms，0 会按 1 处理。
-reg [2:0] flow_order0;        // 流水第 0 步点亮的 LED 编号。
-reg [2:0] flow_order1;        // 流水第 1 步点亮的 LED 编号。
-reg [2:0] flow_order2;        // 流水第 2 步点亮的 LED 编号。
-reg [2:0] flow_order3;        // 流水第 3 步点亮的 LED 编号。
-reg [2:0] flow_order4;        // 流水第 4 步点亮的 LED 编号。
-reg [2:0] flow_order5;        // 流水第 5 步点亮的 LED 编号。
-reg [2:0] flow_order6;        // 流水第 6 步点亮的 LED 编号。
-reg [2:0] flow_order7;        // 流水第 7 步点亮的 LED 编号。
+reg [3:0] cfg_flow_count;     // 当前流水画面数量，范围 1~8。
+reg [7:0] flow_frame0;        // 流水第 0 个画面，bit0~bit7 对应 LED0~LED7。
+reg [7:0] flow_frame1;        // 流水第 1 个画面，bit0~bit7 对应 LED0~LED7。
+reg [7:0] flow_frame2;        // 流水第 2 个画面，bit0~bit7 对应 LED0~LED7。
+reg [7:0] flow_frame3;        // 流水第 3 个画面，bit0~bit7 对应 LED0~LED7。
+reg [7:0] flow_frame4;        // 流水第 4 个画面，bit0~bit7 对应 LED0~LED7。
+reg [7:0] flow_frame5;        // 流水第 5 个画面，bit0~bit7 对应 LED0~LED7。
+reg [7:0] flow_frame6;        // 流水第 6 个画面，bit0~bit7 对应 LED0~LED7。
+reg [7:0] flow_frame7;        // 流水第 7 个画面，bit0~bit7 对应 LED0~LED7。
 
 //==================== 协议解析暂存寄存器 ====================
-reg [1:0] rx_state;       // 固定帧接收状态机。
-reg [3:0] payload_index;  // 当前接收的 payload 字节序号，0~13。
-reg [7:0] checksum_accum; // payload 字节 XOR 累加值。
-reg [7:0] tmp_mode;       // 暂存模式字段。
-reg [7:0] tmp_r;          // 暂存红色通道。
-reg [7:0] tmp_g;          // 暂存绿色通道。
-reg [7:0] tmp_b;          // 暂存蓝色通道。
-reg [7:0] tmp_brightness; // 暂存亮度字段。
-reg [7:0] tmp_period;     // 暂存呼吸周期字段。
-reg [7:0] tmp_order0;     // 暂存流水灯序第 0 项。
-reg [7:0] tmp_order1;     // 暂存流水灯序第 1 项。
-reg [7:0] tmp_order2;     // 暂存流水灯序第 2 项。
-reg [7:0] tmp_order3;     // 暂存流水灯序第 3 项。
-reg [7:0] tmp_order4;     // 暂存流水灯序第 4 项。
-reg [7:0] tmp_order5;     // 暂存流水灯序第 5 项。
-reg [7:0] tmp_order6;     // 暂存流水灯序第 6 项。
-reg [7:0] tmp_order7;     // 暂存流水灯序第 7 项。
+reg [1:0] rx_state;            // 可变长度帧接收状态机。
+reg [3:0] payload_index;       // 当前接收的 payload 字节序号。
+reg [7:0] checksum_accum;      // payload 字节 XOR 累加值。
+reg [7:0] tmp_mode;            // 暂存模式字段。
+reg [7:0] tmp_r;               // 暂存红色通道。
+reg [7:0] tmp_g;               // 暂存绿色通道。
+reg [7:0] tmp_b;               // 暂存蓝色通道。
+reg [7:0] tmp_brightness;      // 暂存亮度字段。
+reg [7:0] tmp_period;          // 暂存呼吸周期字段。
+reg [7:0] tmp_flow_count;      // 暂存流水画面数量。
+reg [7:0] tmp_flow_frame0;     // 暂存流水第 0 个画面。
+reg [7:0] tmp_flow_frame1;     // 暂存流水第 1 个画面。
+reg [7:0] tmp_flow_frame2;     // 暂存流水第 2 个画面。
+reg [7:0] tmp_flow_frame3;     // 暂存流水第 3 个画面。
+reg [7:0] tmp_flow_frame4;     // 暂存流水第 4 个画面。
+reg [7:0] tmp_flow_frame5;     // 暂存流水第 5 个画面。
+reg [7:0] tmp_flow_frame6;     // 暂存流水第 6 个画面。
+reg [7:0] tmp_flow_frame7;     // 暂存流水第 7 个画面。
 
-wire frame_checksum_ok = (rx_data == checksum_accum); // 当前校验字节是否匹配 payload XOR。
-wire frame_mode_ok = (tmp_mode <= 8'd3);              // 模式字段是否合法。
-wire frame_order_ok = flow_order_valid(               // 流水灯序必须为 0~7 的不重复排列。
-    tmp_order0, tmp_order1, tmp_order2, tmp_order3,
-    tmp_order4, tmp_order5, tmp_order6, tmp_order7
-);
-wire frame_accept = frame_checksum_ok && frame_mode_ok && frame_order_ok; // 整帧是否允许应用。
+wire frame_checksum_ok = (rx_data == checksum_accum);                         // 当前校验字节是否匹配 payload XOR。
+wire frame_mode_ok = (tmp_mode <= 8'd3);                                       // 模式字段是否合法。
+wire frame_flow_count_ok = (tmp_flow_count >= 8'd1) && (tmp_flow_count <= 8'd8); // 流水画面数量必须为 1~8。
+wire frame_accept = frame_checksum_ok && frame_mode_ok && frame_flow_count_ok;  // 整帧是否允许应用。
 
 //==================== 时间基准计数器 ====================
 reg [15:0] cnt_1ms;                            // 1 ms 分频计数器，50 MHz 下计数 0~49999。
@@ -90,53 +91,21 @@ always @(posedge clk or negedge rst_n) begin
 end
 
 //------------------------------------------------------------------------------
-// 函数: flow_order_valid
-// 功能: 检查 8 字节流水灯序是否恰好包含 0~7 且不重复。
+// 函数: get_flow_frame
+// 功能: 根据当前流水位置返回 8 bit 画面掩码。
 //------------------------------------------------------------------------------
-function flow_order_valid;
-    input [7:0] order0;
-    input [7:0] order1;
-    input [7:0] order2;
-    input [7:0] order3;
-    input [7:0] order4;
-    input [7:0] order5;
-    input [7:0] order6;
-    input [7:0] order7;
-    reg [7:0] seen;
-    begin
-        seen = 8'd0;
-        flow_order_valid = 1'b0;
-        if((order0 < 8'd8) && (order1 < 8'd8) && (order2 < 8'd8) && (order3 < 8'd8) &&
-           (order4 < 8'd8) && (order5 < 8'd8) && (order6 < 8'd8) && (order7 < 8'd8)) begin
-            seen[order0[2:0]] = 1'b1;
-            seen[order1[2:0]] = 1'b1;
-            seen[order2[2:0]] = 1'b1;
-            seen[order3[2:0]] = 1'b1;
-            seen[order4[2:0]] = 1'b1;
-            seen[order5[2:0]] = 1'b1;
-            seen[order6[2:0]] = 1'b1;
-            seen[order7[2:0]] = 1'b1;
-            flow_order_valid = (seen == 8'hFF);
-        end
-    end
-endfunction
-
-//------------------------------------------------------------------------------
-// 函数: get_flow_led
-// 功能: 根据当前流水步号返回自定义灯序中的 LED 编号。
-//------------------------------------------------------------------------------
-function [2:0] get_flow_led;
-    input [2:0] pos; // 当前流水位置。
+function [7:0] get_flow_frame;
+    input [2:0] pos; // 当前流水画面位置。
     begin
         case(pos)
-            3'd0: get_flow_led = flow_order0;
-            3'd1: get_flow_led = flow_order1;
-            3'd2: get_flow_led = flow_order2;
-            3'd3: get_flow_led = flow_order3;
-            3'd4: get_flow_led = flow_order4;
-            3'd5: get_flow_led = flow_order5;
-            3'd6: get_flow_led = flow_order6;
-            default: get_flow_led = flow_order7;
+            3'd0: get_flow_frame = flow_frame0;
+            3'd1: get_flow_frame = flow_frame1;
+            3'd2: get_flow_frame = flow_frame2;
+            3'd3: get_flow_frame = flow_frame3;
+            3'd4: get_flow_frame = flow_frame4;
+            3'd5: get_flow_frame = flow_frame5;
+            3'd6: get_flow_frame = flow_frame6;
+            default: get_flow_frame = flow_frame7;
         endcase
     end
 endfunction
@@ -174,9 +143,9 @@ function [191:0] pack_rgb8;
     end
 endfunction
 
-//==================== 1. 蓝牙固定帧解析 ====================
-// 通信协议: AA 55 mode R G B brightness period order0..order7 checksum。
-// checksum 为 mode 到 order7 共 14 字节的 XOR；校验和灯序合法后才更新配置。
+//==================== 1. 蓝牙可变长度帧解析 ====================
+// 通信协议: AA 55 mode R G B brightness period flow_count frame0..frameN-1 checksum。
+// checksum 为 mode 到最后一个 frame 共 7+N 字节的 XOR；校验和画面数量合法后才更新配置。
 always @(posedge clk or negedge rst_n) begin
     if(!rst_n) begin
         rx_state <= RX_WAIT_HEAD0;
@@ -188,14 +157,15 @@ always @(posedge clk or negedge rst_n) begin
         tmp_b <= 8'd0;
         tmp_brightness <= 8'd0;
         tmp_period <= 8'd0;
-        tmp_order0 <= 8'd0;
-        tmp_order1 <= 8'd1;
-        tmp_order2 <= 8'd2;
-        tmp_order3 <= 8'd3;
-        tmp_order4 <= 8'd4;
-        tmp_order5 <= 8'd5;
-        tmp_order6 <= 8'd6;
-        tmp_order7 <= 8'd7;
+        tmp_flow_count <= 8'd8;
+        tmp_flow_frame0 <= 8'b0000_0001;
+        tmp_flow_frame1 <= 8'b0000_0010;
+        tmp_flow_frame2 <= 8'b0000_0100;
+        tmp_flow_frame3 <= 8'b0000_1000;
+        tmp_flow_frame4 <= 8'b0001_0000;
+        tmp_flow_frame5 <= 8'b0010_0000;
+        tmp_flow_frame6 <= 8'b0100_0000;
+        tmp_flow_frame7 <= 8'b1000_0000;
     end else if(rx_done) begin
         case(rx_state)
             RX_WAIT_HEAD0: begin
@@ -221,16 +191,26 @@ always @(posedge clk or negedge rst_n) begin
                     4'd3:  tmp_b <= rx_data;
                     4'd4:  tmp_brightness <= rx_data;
                     4'd5:  tmp_period <= rx_data;
-                    4'd6:  tmp_order0 <= rx_data;
-                    4'd7:  tmp_order1 <= rx_data;
-                    4'd8:  tmp_order2 <= rx_data;
-                    4'd9:  tmp_order3 <= rx_data;
-                    4'd10: tmp_order4 <= rx_data;
-                    4'd11: tmp_order5 <= rx_data;
-                    4'd12: tmp_order6 <= rx_data;
-                    default: tmp_order7 <= rx_data;
+                    4'd6:  tmp_flow_count <= rx_data;
+                    4'd7:  tmp_flow_frame0 <= rx_data;
+                    4'd8:  tmp_flow_frame1 <= rx_data;
+                    4'd9:  tmp_flow_frame2 <= rx_data;
+                    4'd10: tmp_flow_frame3 <= rx_data;
+                    4'd11: tmp_flow_frame4 <= rx_data;
+                    4'd12: tmp_flow_frame5 <= rx_data;
+                    4'd13: tmp_flow_frame6 <= rx_data;
+                    default: tmp_flow_frame7 <= rx_data;
                 endcase
-                if(payload_index == 4'd13) begin
+                if(payload_index == BASE_PAYLOAD_LAST) begin
+                    if((rx_data < 8'd1) || (rx_data > 8'd8)) begin
+                        // 画面数量非法时立即丢弃本帧，避免继续等待未知长度数据。
+                        rx_state <= RX_WAIT_HEAD0;
+                        payload_index <= 4'd0;
+                    end else begin
+                        payload_index <= payload_index + 1'b1;
+                    end
+                end else if((payload_index >= BASE_PAYLOAD_LAST) &&
+                            (payload_index == (BASE_PAYLOAD_LAST + tmp_flow_count[3:0]))) begin
                     rx_state <= RX_CHECKSUM;
                 end else begin
                     payload_index <= payload_index + 1'b1;
@@ -254,14 +234,15 @@ always @(posedge clk or negedge rst_n) begin
         cfg_b <= 8'h00;
         cfg_brightness <= DEFAULT_BRIGHTNESS;
         cfg_period_100ms <= 8'd20;
-        flow_order0 <= 3'd0;
-        flow_order1 <= 3'd1;
-        flow_order2 <= 3'd2;
-        flow_order3 <= 3'd3;
-        flow_order4 <= 3'd4;
-        flow_order5 <= 3'd5;
-        flow_order6 <= 3'd6;
-        flow_order7 <= 3'd7;
+        cfg_flow_count <= FLOW_FRAME_MAX;
+        flow_frame0 <= 8'b0000_1000;
+        flow_frame1 <= 8'b0000_0100;
+        flow_frame2 <= 8'b0000_0010;
+        flow_frame3 <= 8'b0000_0001;
+        flow_frame4 <= 8'b0001_0000;
+        flow_frame5 <= 8'b0010_0000;
+        flow_frame6 <= 8'b0100_0000;
+        flow_frame7 <= 8'b1000_0000;
     end else if(rx_done && (rx_state == RX_CHECKSUM) && frame_accept) begin
         sys_mode <= tmp_mode[1:0];
         cfg_r <= tmp_r;
@@ -269,14 +250,15 @@ always @(posedge clk or negedge rst_n) begin
         cfg_b <= tmp_b;
         cfg_brightness <= tmp_brightness;
         cfg_period_100ms <= (tmp_period == 8'd0) ? 8'd1 : tmp_period;
-        flow_order0 <= tmp_order0[2:0];
-        flow_order1 <= tmp_order1[2:0];
-        flow_order2 <= tmp_order2[2:0];
-        flow_order3 <= tmp_order3[2:0];
-        flow_order4 <= tmp_order4[2:0];
-        flow_order5 <= tmp_order5[2:0];
-        flow_order6 <= tmp_order6[2:0];
-        flow_order7 <= tmp_order7[2:0];
+        cfg_flow_count <= tmp_flow_count[3:0];
+        flow_frame0 <= tmp_flow_frame0;
+        flow_frame1 <= tmp_flow_frame1;
+        flow_frame2 <= tmp_flow_frame2;
+        flow_frame3 <= tmp_flow_frame3;
+        flow_frame4 <= tmp_flow_frame4;
+        flow_frame5 <= tmp_flow_frame5;
+        flow_frame6 <= tmp_flow_frame6;
+        flow_frame7 <= tmp_flow_frame7;
     end
 end
 
@@ -329,13 +311,14 @@ end
 
 //==================== 4. 颜色阵列与灯效逻辑 ====================
 reg [7:0]   run_cnt;        // 流水速度计数器，基于 1 ms tick。
-reg [2:0]   run_pos;        // 当前流水灯序位置。
+reg [2:0]   run_pos;        // 当前流水画面位置。
 reg [7:0]   gradient_cnt;   // 渐变速度计数器，基于 1 ms tick。
 reg [2:0]   gradient_phase; // 当前渐变相位，3 bit 溢出自然循环。
 reg [191:0] led_rgb_data;   // 输出给 ws2812_fast 的 8 颗 LED RGB 数据。
 
-wire [23:0] cfg_rgb = {cfg_r, cfg_g, cfg_b};         // 当前 App 下发的基础 RGB 颜色。
-wire [2:0]  active_flow_led = get_flow_led(run_pos); // 流水当前应点亮的 LED 编号。
+wire [23:0] cfg_rgb = {cfg_r, cfg_g, cfg_b};               // 当前 App 下发的基础 RGB 颜色。
+wire [7:0]  active_flow_frame = get_flow_frame(run_pos);   // 流水当前画面的 8 bit 灯掩码。
+wire [3:0]  flow_last_pos = cfg_flow_count - 1'b1;         // 当前流水最后一个有效画面位置。
 wire [15:0] output_brightness = (sys_mode == MODE_BREATH) ? breath_bright : {cfg_brightness, cfg_brightness};
 
 always @(posedge clk or negedge rst_n) begin
@@ -358,7 +341,12 @@ always @(posedge clk or negedge rst_n) begin
                     gradient_cnt <= 8'd0;
                     if(run_cnt == RUN_STEP_LAST) begin
                         run_cnt <= 8'd0;
-                        run_pos <= run_pos + 1'b1;
+                        // 按已下发画面数量回绕，基础流水和高级流水共用同一套底层协议。
+                        if({1'b0, run_pos} >= flow_last_pos) begin
+                            run_pos <= 3'd0;
+                        end else begin
+                            run_pos <= run_pos + 1'b1;
+                        end
                     end else begin
                         run_cnt <= run_cnt + 1'b1;
                     end
@@ -385,14 +373,14 @@ always @(posedge clk or negedge rst_n) begin
             end
             MODE_FLOW: begin
                 led_rgb_data <= pack_rgb8(
-                    (active_flow_led == 3'd0) ? cfg_rgb : 24'd0,
-                    (active_flow_led == 3'd1) ? cfg_rgb : 24'd0,
-                    (active_flow_led == 3'd2) ? cfg_rgb : 24'd0,
-                    (active_flow_led == 3'd3) ? cfg_rgb : 24'd0,
-                    (active_flow_led == 3'd4) ? cfg_rgb : 24'd0,
-                    (active_flow_led == 3'd5) ? cfg_rgb : 24'd0,
-                    (active_flow_led == 3'd6) ? cfg_rgb : 24'd0,
-                    (active_flow_led == 3'd7) ? cfg_rgb : 24'd0
+                    active_flow_frame[0] ? cfg_rgb : 24'd0,
+                    active_flow_frame[1] ? cfg_rgb : 24'd0,
+                    active_flow_frame[2] ? cfg_rgb : 24'd0,
+                    active_flow_frame[3] ? cfg_rgb : 24'd0,
+                    active_flow_frame[4] ? cfg_rgb : 24'd0,
+                    active_flow_frame[5] ? cfg_rgb : 24'd0,
+                    active_flow_frame[6] ? cfg_rgb : 24'd0,
+                    active_flow_frame[7] ? cfg_rgb : 24'd0
                 );
             end
             MODE_BREATH: begin

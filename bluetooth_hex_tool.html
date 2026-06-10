@@ -69,6 +69,13 @@
       font-weight: 700;
     }
 
+    .sub-title {
+      margin: 0 0 10px;
+      font-size: 14px;
+      font-weight: 700;
+      color: #374151;
+    }
+
     .panel-heading {
       display: flex;
       align-items: center;
@@ -79,6 +86,28 @@
 
     .panel-heading .section-title {
       margin: 0;
+    }
+
+    .panel-heading.compact {
+      align-items: center;
+      margin-bottom: 10px;
+    }
+
+    .panel-heading.compact .sub-title {
+      margin: 0;
+    }
+
+    .inline-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    .inline-label select {
+      width: 76px;
+      height: 34px;
     }
 
     .grid {
@@ -193,6 +222,61 @@
       line-height: 1.2;
     }
 
+    .advanced-flow {
+      margin-top: 16px;
+      padding-top: 14px;
+      border-top: 1px solid #eef1f5;
+    }
+
+    .flow-frames {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .flow-frame-card {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 10px;
+      background: #fbfcfd;
+    }
+
+    .flow-frame-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 8px;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .flow-frame-title code {
+      font-family: var(--mono);
+      color: var(--muted);
+      font-weight: 600;
+    }
+
+    .frame-lamps {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 6px;
+    }
+
+    .frame-lamp {
+      height: 34px;
+      padding: 0;
+      border-radius: 6px;
+      font-size: 12px;
+    }
+
+    .frame-lamp.selected {
+      border-color: var(--accent);
+      background: var(--accent-weak);
+      color: var(--accent);
+      font-weight: 700;
+    }
+
     .quick-buttons {
       display: flex;
       flex-wrap: wrap;
@@ -294,6 +378,10 @@
       .byte-row {
         grid-template-columns: 48px 58px 1fr;
       }
+
+      .flow-frames {
+        grid-template-columns: 1fr;
+      }
     }
   </style>
 </head>
@@ -301,7 +389,7 @@
   <main>
     <section class="header">
       <h1>蓝牙彩灯 Hex 生成工具</h1>
-      <p class="subtitle">选择参数后复制下方 17 字节 Hex，用串口工具以“HEX 发送/十六进制发送”模式发给蓝牙模块。</p>
+      <p class="subtitle">选择参数后复制下方可变长度 Hex，用串口工具以“HEX 发送/十六进制发送”模式发给蓝牙模块。</p>
     </section>
 
     <section class="panel">
@@ -347,7 +435,8 @@
       </div>
 
       <div class="mode-block" id="flowBlock">
-        <h2 class="section-title">流水灯序</h2>
+        <h2 class="section-title">流水</h2>
+        <h3 class="sub-title">基础流水</h3>
         <div class="flow-order" id="flowOrder"></div>
         <div class="quick-buttons">
           <button type="button" data-order="3,2,1,0,4,5,6,7">正序</button>
@@ -356,7 +445,23 @@
           <button type="button" data-order="3,4,2,5,1,6,0,7">交错</button>
           <button type="button" id="clearOrderButton">清空选择</button>
         </div>
-        <div class="hint">按想要的流水顺序点击灯块；页面显示 1~8，发送时自动转换为协议需要的 0~7。</div>
+        <div class="hint">按想要的流水顺序点击灯块；基础流水会自动转换为每个画面只亮一颗灯的新版协议。</div>
+
+        <div class="advanced-flow">
+          <div class="panel-heading compact">
+            <h3 class="sub-title">高级画面</h3>
+            <label class="inline-label" for="flowCount">画面数量
+              <select id="flowCount"></select>
+            </label>
+          </div>
+          <div class="flow-frames" id="flowFrames"></div>
+          <div class="quick-buttons">
+            <button type="button" id="basicToFramesButton">用基础灯序生成</button>
+            <button type="button" id="allOnFramesButton">全部画面全亮</button>
+            <button type="button" id="allOffFramesButton">全部画面全灭</button>
+          </div>
+          <div class="hint">每个画面是 1 字节灯掩码，bit0~bit7 分别控制 LED0~LED7，可在同一画面同时点亮多颗灯。</div>
+        </div>
       </div>
     </section>
 
@@ -388,6 +493,8 @@
     const flowBlockEl = document.getElementById("flowBlock");
     const periodBlockEl = document.getElementById("periodBlock");
     const flowOrderEl = document.getElementById("flowOrder");
+    const flowCountEl = document.getElementById("flowCount");
+    const flowFramesEl = document.getElementById("flowFrames");
     const hexOutputEl = document.getElementById("hexOutput");
     const statusEl = document.getElementById("status");
     const settingsStatusEl = document.getElementById("settingsStatus");
@@ -396,20 +503,27 @@
     const copyCompactButtonEl = document.getElementById("copyCompactButton");
     const resetButtonEl = document.getElementById("resetButton");
     const clearOrderButtonEl = document.getElementById("clearOrderButton");
+    const basicToFramesButtonEl = document.getElementById("basicToFramesButton");
+    const allOnFramesButtonEl = document.getElementById("allOnFramesButton");
+    const allOffFramesButtonEl = document.getElementById("allOffFramesButton");
     const storageKey = "rgbBluetoothHexToolSettings";
+    const maxFlowFrames = 8;
     const defaultSettings = {
       mode: "1",
       color: "#00ff00",
       brightness: "17",
       period: "20",
-      order: ["3", "2", "1", "0", "4", "5", "6", "7"]
+      order: ["3", "2", "1", "0", "4", "5", "6", "7"],
+      flowFrames: [0x08, 0x04, 0x02, 0x01, 0x10, 0x20, 0x40, 0x80]
     };
-
-    const labels = [
-      "帧头", "帧头", "模式", "R", "G", "B", "亮度", "周期",
-      "灯序0", "灯序1", "灯序2", "灯序3", "灯序4", "灯序5", "灯序6", "灯序7", "校验"
-    ];
     const lampToHardware = [3, 2, 1, 0, 4, 5, 6, 7]; // 页面上排从左到右与硬件编号相反，底排保持一致。
+
+    for (let count = 1; count <= maxFlowFrames; count += 1) {
+      const option = document.createElement("option");
+      option.value = String(count);
+      option.textContent = `${count} 个`;
+      flowCountEl.appendChild(option);
+    }
 
     // 初始化 8 个图形化灯块，同时保留隐藏输入作为协议数据源。
     for (let index = 0; index < 8; index += 1) {
@@ -431,6 +545,7 @@
 
     const orderInputs = Array.from(document.querySelectorAll("[data-order-input='true']"));
     const flowLamps = Array.from(document.querySelectorAll("[data-lamp]"));
+    let flowFrames = defaultSettings.flowFrames.slice();
 
     function clampByte(value, fallback) {
       const number = Number.parseInt(value, 10);
@@ -484,6 +599,31 @@
       return order.every((value) => value >= 0 && value <= 7) && seen.size === 8;
     }
 
+    function sanitizeFlowFrames(values) {
+      const clean = (Array.isArray(values) ? values : [])
+        .map((value) => clampByte(value, 0))
+        .slice(0, maxFlowFrames);
+      return clean.length > 0 ? clean : defaultSettings.flowFrames.slice();
+    }
+
+    function orderToFlowFrames(order) {
+      // 基础流水仍用旧的顺序交互，底层统一转换成单 bit 画面掩码。
+      return order
+        .filter((value) => value >= 0 && value <= 7)
+        .slice(0, maxFlowFrames)
+        .map((ledIndex) => 1 << ledIndex);
+    }
+
+    function activeFlowFrames() {
+      const count = clampByte(flowCountEl.value, maxFlowFrames);
+      return sanitizeFlowFrames(flowFrames).slice(0, Math.min(maxFlowFrames, Math.max(1, count)));
+    }
+
+    function writeFlowFrames(values) {
+      flowFrames = sanitizeFlowFrames(values);
+      flowCountEl.value = String(flowFrames.length);
+    }
+
     function sanitizeOrderValues(values) {
       const seen = new Set();
       return values
@@ -517,6 +657,37 @@
       });
     }
 
+    function renderFlowFrames() {
+      const frames = activeFlowFrames();
+      flowFramesEl.innerHTML = "";
+
+      frames.forEach((mask, frameIndex) => {
+        const card = document.createElement("div");
+        card.className = "flow-frame-card";
+        const title = document.createElement("div");
+        title.className = "flow-frame-title";
+        title.innerHTML = `<span>画面 ${frameIndex + 1}</span><code>${toHex(mask)}</code>`;
+        const lamps = document.createElement("div");
+        lamps.className = "frame-lamps";
+
+        lampToHardware.forEach((ledIndex, displayIndex) => {
+          const lamp = document.createElement("button");
+          lamp.type = "button";
+          lamp.className = "frame-lamp";
+          lamp.classList.toggle("selected", Boolean(mask & (1 << ledIndex)));
+          lamp.textContent = String(displayIndex + 1);
+          lamp.addEventListener("click", () => {
+            flowFrames[frameIndex] = clampByte(flowFrames[frameIndex], 0) ^ (1 << ledIndex);
+            update();
+          });
+          lamps.appendChild(lamp);
+        });
+
+        card.append(title, lamps);
+        flowFramesEl.appendChild(card);
+      });
+    }
+
     function toggleLampInOrder(ledIndex) {
       const order = sanitizeOrderValues(orderInputs.map((input) => input.value));
       const exists = order.indexOf(ledIndex);
@@ -534,7 +705,8 @@
         color: colorEl.value,
         brightness: brightnessEl.value,
         period: periodEl.value,
-        order: orderInputs.map((input) => input.value)
+        order: orderInputs.map((input) => input.value),
+        flowFrames: activeFlowFrames()
       };
     }
 
@@ -547,6 +719,7 @@
       periodEl.value = settings.period;
       periodNumberEl.value = settings.period;
       writeOrder(settings.order.slice(0, 8));
+      writeFlowFrames(settings.flowFrames ?? orderToFlowFrames(readOrder()));
     }
 
     function saveSettings() {
@@ -565,7 +738,8 @@
           color: settings.color ?? defaultSettings.color,
           brightness: settings.brightness ?? defaultSettings.brightness,
           period: settings.period ?? defaultSettings.period,
-          order: Array.isArray(settings.order) ? settings.order : defaultSettings.order
+          order: Array.isArray(settings.order) ? settings.order : defaultSettings.order,
+          flowFrames: Array.isArray(settings.flowFrames) ? settings.flowFrames : null
         });
       } catch (error) {
         localStorage.removeItem(storageKey);
@@ -579,8 +753,8 @@
       const brightness = clampByte(brightnessEl.value, 0);
       const period = Math.max(1, clampByte(periodEl.value, 20));
       const order = readOrder();
-      const payloadOrder = order.map((value) => (value >= 0 && value <= 7 ? value : 0));
-      const payload = [mode, r, g, b, brightness, period, ...payloadOrder];
+      const frames = activeFlowFrames();
+      const payload = [mode, r, g, b, brightness, period, frames.length, ...frames];
       const checksum = payload.reduce((sum, value) => sum ^ value, 0);
       return {
         mode,
@@ -588,6 +762,7 @@
         brightness,
         period,
         order,
+        frames,
         checksum,
         bytes: [0xAA, 0x55, ...payload, checksum]
       };
@@ -603,12 +778,25 @@
       colorEl.disabled = isGradient;
     }
 
+    function byteLabel(index, bytes) {
+      if (index === 0 || index === 1) return "帧头";
+      if (index === 2) return "模式";
+      if (index === 3) return "R";
+      if (index === 4) return "G";
+      if (index === 5) return "B";
+      if (index === 6) return "亮度";
+      if (index === 7) return "周期";
+      if (index === 8) return "画面数";
+      if (index === bytes.length - 1) return "校验";
+      return `画面${index - 9}`;
+    }
+
     function renderTable(bytes) {
       byteTableEl.innerHTML = "";
       bytes.forEach((value, index) => {
         const row = document.createElement("div");
         row.className = "byte-row";
-        row.innerHTML = `<span>${index}</span><strong>${toHex(value)}</strong><span>${labels[index]}</span>`;
+        row.innerHTML = `<span>${index}</span><strong>${toHex(value)}</strong><span>${byteLabel(index, bytes)}</span>`;
         byteTableEl.appendChild(row);
       });
     }
@@ -624,18 +812,19 @@
       colorHintEl.textContent = `RGB: ${frame.rgb.map(toHex).join(" ")}`;
       hexOutputEl.textContent = hexText;
       renderFlowLamps(frame.order);
+      renderFlowFrames();
       renderTable(frame.bytes);
 
-      if (!orderOk) {
-        statusEl.innerHTML = "<span class='error'>流水灯序无效：请按顺序点满 8 个灯。</span>";
+      if (frame.mode === 1 && !orderOk) {
+        statusEl.innerHTML = "<span class='error'>基础流水灯序未点满；可继续使用高级画面发送，或点击“用基础灯序生成”。</span>";
       } else if (frame.mode === 3) {
         statusEl.textContent = "渐变模式暂时只使用亮度字段，RGB 和周期会被板子忽略。";
       } else {
-        statusEl.textContent = `校验字节：${toHex(frame.checksum)}`;
+        statusEl.textContent = `画面数：${frame.frames.length}，校验字节：${toHex(frame.checksum)}`;
       }
 
-      copyButtonEl.disabled = !orderOk;
-      copyCompactButtonEl.disabled = !orderOk;
+      copyButtonEl.disabled = frame.frames.length < 1;
+      copyCompactButtonEl.disabled = frame.frames.length < 1;
       saveSettings();
     }
 
@@ -647,8 +836,17 @@
     flowLamps.forEach((lamp) => {
       lamp.addEventListener("click", () => {
         toggleLampInOrder(lampToHardware[clampByte(lamp.dataset.lamp, 0)]);
+        writeFlowFrames(orderToFlowFrames(readOrder()));
         update();
       });
+    });
+
+    flowCountEl.addEventListener("change", () => {
+      const count = Math.min(maxFlowFrames, Math.max(1, clampByte(flowCountEl.value, maxFlowFrames)));
+      const next = sanitizeFlowFrames(flowFrames);
+      while (next.length < count) next.push(0);
+      writeFlowFrames(next.slice(0, count));
+      update();
     });
 
     brightnessEl.addEventListener("input", () => {
@@ -684,12 +882,29 @@
     document.querySelectorAll("[data-order]").forEach((button) => {
       button.addEventListener("click", () => {
         writeOrder(button.dataset.order.split(","));
+        writeFlowFrames(orderToFlowFrames(readOrder()));
         update();
       });
     });
 
     clearOrderButtonEl.addEventListener("click", () => {
       writeOrder([]);
+      writeFlowFrames([0]);
+      update();
+    });
+
+    basicToFramesButtonEl.addEventListener("click", () => {
+      writeFlowFrames(orderToFlowFrames(readOrder()));
+      update();
+    });
+
+    allOnFramesButtonEl.addEventListener("click", () => {
+      writeFlowFrames(new Array(maxFlowFrames).fill(0xFF));
+      update();
+    });
+
+    allOffFramesButtonEl.addEventListener("click", () => {
+      writeFlowFrames(new Array(maxFlowFrames).fill(0x00));
       update();
     });
 
