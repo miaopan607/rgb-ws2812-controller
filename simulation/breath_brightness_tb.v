@@ -60,7 +60,7 @@ module breath_brightness_tb;
         dut.cfg_g = 8'h00;
         dut.cfg_b = 8'hff;
         dut.cfg_brightness = 8'h40;
-        dut.cfg_period_100ms = 8'd20;
+        dut.cfg_period_units = 8'd100;
         dut.breath_step_cnt = 32'd0;
         dut.breath_bright = 16'd0;
 

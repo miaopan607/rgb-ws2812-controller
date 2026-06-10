@@ -34,7 +34,7 @@ localparam [1:0] RX_WAIT_HEAD1 = 2'd1; // 等待 0x55。
 localparam [1:0] RX_PAYLOAD    = 2'd2; // 接收 mode 到最后一个流水画面。
 localparam [1:0] RX_CHECKSUM   = 2'd3; // 接收 XOR 校验字节。
 
-localparam [7:0] RUN_STEP_LAST      = 8'd249; // 250 ms 流动一次，基于 1 ms tick。
+localparam [7:0] DISCO_STEP_LAST    = 8'd249; // Disco 仍按 250 ms 切换一次，基于 1 ms tick。
 localparam [7:0] DEFAULT_BRIGHTNESS = 8'h11;  // 默认亮度，避免复位后过亮。
 localparam [3:0] BASE_PAYLOAD_LAST  = 4'd6;   // payload 第 6 字节为 flow_count。
 localparam [3:0] FLOW_FRAME_MAX     = 4'd8;   // 高级流水最多 8 个画面。
@@ -47,7 +47,7 @@ reg [7:0] cfg_r;              // App 下发的红色通道。
 reg [7:0] cfg_g;              // App 下发的绿色通道。
 reg [7:0] cfg_b;              // App 下发的蓝色通道。
 reg [7:0] cfg_brightness;     // 静态、流水、渐变模式使用的全局亮度。
-reg [7:0] cfg_period_100ms;   // 周期字段原始值；呼吸模式单位 100 ms，渐变模式单位 50 ms。
+reg [7:0] cfg_period_units;   // 周期字段原始值；流水单位 10 ms，呼吸单位 20 ms，渐变模式单位 50 ms。
 reg [3:0] cfg_flow_count;     // 当前流水画面数量，范围 1~8。
 reg [7:0] flow_frame0;        // 流水第 0 个画面，bit0~bit7 对应 LED0~LED7。
 reg [7:0] flow_frame1;        // 流水第 1 个画面，bit0~bit7 对应 LED0~LED7。
@@ -274,7 +274,7 @@ always @(posedge clk or negedge rst_n) begin
         cfg_g <= 8'hFF;
         cfg_b <= 8'h00;
         cfg_brightness <= DEFAULT_BRIGHTNESS;
-        cfg_period_100ms <= 8'd20;
+        cfg_period_units <= 8'd25;
         cfg_flow_count <= FLOW_FRAME_MAX;
         flow_frame0 <= 8'b0000_1000;
         flow_frame1 <= 8'b0000_0100;
@@ -290,7 +290,7 @@ always @(posedge clk or negedge rst_n) begin
         cfg_g <= tmp_g;
         cfg_b <= tmp_b;
         cfg_brightness <= tmp_brightness;
-        cfg_period_100ms <= (tmp_period == 8'd0) ? 8'd1 : tmp_period;
+        cfg_period_units <= (tmp_period == 8'd0) ? 8'd1 : tmp_period;
         cfg_flow_count <= tmp_flow_count[3:0];
         flow_frame0 <= tmp_flow_frame0;
         flow_frame1 <= tmp_flow_frame1;
@@ -307,9 +307,8 @@ end
 reg [31:0] breath_step_cnt; // 当前完整呼吸周期内的 1 ms 节拍计数。
 reg [15:0] breath_bright;   // 呼吸模式 16 bit 内部亮度，输出给 ws2812_fast。
 
-wire [15:0] breath_period_ms = {cfg_period_100ms, 2'b00} + cfg_period_100ms; // period * 5。
-wire [15:0] breath_period_ms_x20 = {breath_period_ms, 4'b0000} + {breath_period_ms, 2'b00}; // period * 100。
-wire [15:0] breath_period_safe = (breath_period_ms_x20 < 16'd2) ? 16'd2 : breath_period_ms_x20;
+wire [15:0] breath_period_ms = {cfg_period_units, 4'b0000} + {cfg_period_units, 2'b00}; // period * 20。
+wire [15:0] breath_period_safe = (breath_period_ms < 16'd2) ? 16'd2 : breath_period_ms;
 wire [15:0] breath_half_period = (breath_period_safe >> 1);
 wire [15:0] breath_full_last = breath_period_safe - 1'b1;
 wire [15:0] breath_rise_denom = (breath_half_period < 16'd2) ? 16'd1 : (breath_half_period - 1'b1);
@@ -351,7 +350,7 @@ always @(posedge clk or negedge rst_n) begin
 end
 
 //==================== 4. 颜色阵列与灯效逻辑 ====================
-reg [7:0]   run_cnt;        // 流水速度计数器，基于 1 ms tick。
+reg [11:0]  run_cnt;        // 流水速度计数器，基于 1 ms tick。
 reg [2:0]   run_pos;        // 当前流水画面位置。
 reg [31:0]  gradient_step_cnt; // 当前完整渐变周期内的 1 ms 节拍计数。
 reg [7:0]   disco_cnt;         // Disco 速度计数器，基于 1 ms tick。
@@ -363,7 +362,9 @@ wire [23:0] cfg_rgb = {cfg_r, cfg_g, cfg_b};               // 当前 App 下发�
 wire [7:0]  active_flow_frame = get_flow_frame(run_pos);   // 流水当前画面的 8 bit 灯掩码。
 wire [3:0]  flow_last_pos = cfg_flow_count - 1'b1;         // 当前流水最后一个有效画面位置。
 wire [15:0] output_brightness = (sys_mode == MODE_BREATH) ? breath_bright : {cfg_brightness, cfg_brightness};
-wire [15:0] gradient_period_ms = {cfg_period_100ms, 5'b0} + {cfg_period_100ms, 4'b0} + {cfg_period_100ms, 1'b0}; // period * 50。
+wire [15:0] flow_period_ms = {cfg_period_units, 3'b000} + {cfg_period_units, 1'b0}; // period * 10。
+wire [15:0] flow_period_safe = (flow_period_ms < 16'd1) ? 16'd1 : flow_period_ms;
+wire [15:0] gradient_period_ms = {cfg_period_units, 5'b0} + {cfg_period_units, 4'b0} + {cfg_period_units, 1'b0}; // period * 50。
 wire [15:0] gradient_period_safe = (gradient_period_ms < 16'd1) ? 16'd1 : gradient_period_ms;
 wire [31:0] gradient_step_next = gradient_step_cnt + 1'b1;
 wire [31:0] gradient_phase_numer = gradient_step_next * GRADIENT_PHASE_COUNT;
@@ -371,7 +372,7 @@ wire [10:0] gradient_phase_calc = gradient_phase_numer / gradient_period_safe;
 
 always @(posedge clk or negedge rst_n) begin
     if(!rst_n) begin
-        run_cnt <= 8'd0;
+        run_cnt <= 12'd0;
         run_pos <= 3'd0;
         gradient_step_cnt <= 32'd0;
         disco_cnt <= 8'd0;
@@ -381,7 +382,7 @@ always @(posedge clk or negedge rst_n) begin
     end else begin
         if(frame_applied) begin
             // 模式或参数更新后重置动画相位，让手机端每次下发都从确定状态开始。
-            run_cnt <= 8'd0;
+            run_cnt <= 12'd0;
             run_pos <= 3'd0;
             gradient_step_cnt <= 32'd0;
             disco_cnt <= 8'd0;
@@ -394,8 +395,8 @@ always @(posedge clk or negedge rst_n) begin
                     disco_cnt <= 8'd0;
                     disco_phase <= 3'd0;
                     gradient_phase <= 11'd0;
-                    if(run_cnt == RUN_STEP_LAST) begin
-                        run_cnt <= 8'd0;
+                    if(run_cnt >= (flow_period_safe - 1'b1)) begin
+                        run_cnt <= 12'd0;
                         // 按已下发画面数量回绕，基础流水和高级流水共用同一套底层协议。
                         if({1'b0, run_pos} >= flow_last_pos) begin
                             run_pos <= 3'd0;
@@ -407,10 +408,10 @@ always @(posedge clk or negedge rst_n) begin
                     end
                 end
                 MODE_DISCO: begin
-                    run_cnt <= 8'd0;
+                    run_cnt <= 12'd0;
                     gradient_step_cnt <= 32'd0;
                     gradient_phase <= 11'd0;
-                    if(disco_cnt == RUN_STEP_LAST) begin
+                    if(disco_cnt == DISCO_STEP_LAST) begin
                         disco_cnt <= 8'd0;
                         disco_phase <= disco_phase + 1'b1;
                     end else begin
@@ -419,7 +420,7 @@ always @(posedge clk or negedge rst_n) begin
                 end
                 MODE_GRADIENT,
                 MODE_FLOW_GRADIENT: begin
-                    run_cnt <= 8'd0;
+                    run_cnt <= 12'd0;
                     disco_cnt <= 8'd0;
                     disco_phase <= 3'd0;
                     if(gradient_step_cnt >= (gradient_period_safe - 1'b1)) begin
@@ -431,7 +432,7 @@ always @(posedge clk or negedge rst_n) begin
                     end
                 end
                 default: begin
-                    run_cnt <= 8'd0;
+                    run_cnt <= 12'd0;
                     gradient_step_cnt <= 32'd0;
                     disco_cnt <= 8'd0;
                     disco_phase <= 3'd0;

@@ -432,7 +432,7 @@
             <input id="period" type="range" min="1" max="255" value="20">
             <input id="periodNumber" type="number" min="1" max="255" value="20">
           </div>
-          <div class="hint" id="periodHint">呼吸模式单位 100ms，20 表示 2 秒完整呼吸周期。</div>
+          <div class="hint" id="periodHint">流水模式单位 10ms，25 表示 250ms 切换一次画面。</div>
         </div>
       </div>
 
@@ -516,7 +516,9 @@
       mode: "1",
       color: "#00ff00",
       brightness: "17",
-      period: "20",
+      flowInterval: "25",
+      breathPeriod: "100",
+      gradientPeriod: "20",
       order: ["3", "2", "1", "0", "4", "5", "6", "7"],
       flowFrames: [0x08, 0x04, 0x02, 0x01, 0x10, 0x20, 0x40, 0x80]
     };
@@ -550,6 +552,30 @@
     const orderInputs = Array.from(document.querySelectorAll("[data-order-input='true']"));
     const flowLamps = Array.from(document.querySelectorAll("[data-lamp]"));
     let flowFrames = defaultSettings.flowFrames.slice();
+    let timingSettings = {
+      flowInterval: defaultSettings.flowInterval,
+      breathPeriod: defaultSettings.breathPeriod,
+      gradientPeriod: defaultSettings.gradientPeriod
+    };
+
+    function activePeriodKey(mode) {
+      if (mode === 1) return "flowInterval";
+      if (mode === 2) return "breathPeriod";
+      if (mode === 4 || mode === 5) return "gradientPeriod";
+      return null;
+    }
+
+    function activePeriodValue(mode) {
+      const key = activePeriodKey(mode);
+      if (!key) return "20";
+      return timingSettings[key] ?? defaultSettings[key];
+    }
+
+    function syncTimingSettingFromInput(mode) {
+      const key = activePeriodKey(mode);
+      if (!key) return;
+      timingSettings[key] = periodEl.value;
+    }
 
     function clampByte(value, fallback) {
       const number = Number.parseInt(value, 10);
@@ -708,7 +734,9 @@
         mode: modeEl.value,
         color: colorEl.value,
         brightness: brightnessEl.value,
-        period: periodEl.value,
+        flowInterval: timingSettings.flowInterval,
+        breathPeriod: timingSettings.breathPeriod,
+        gradientPeriod: timingSettings.gradientPeriod,
         order: orderInputs.map((input) => input.value),
         flowFrames: activeFlowFrames()
       };
@@ -720,8 +748,14 @@
       colorEl.value = settings.color;
       brightnessEl.value = settings.brightness;
       brightnessNumberEl.value = settings.brightness;
-      periodEl.value = settings.period;
-      periodNumberEl.value = settings.period;
+      timingSettings = {
+        flowInterval: settings.flowInterval ?? settings.period ?? defaultSettings.flowInterval,
+        breathPeriod: settings.breathPeriod ?? settings.period ?? defaultSettings.breathPeriod,
+        gradientPeriod: settings.gradientPeriod ?? settings.period ?? defaultSettings.gradientPeriod
+      };
+      const activePeriod = activePeriodValue(clampByte(settings.mode, 1));
+      periodEl.value = activePeriod;
+      periodNumberEl.value = activePeriod;
       writeOrder(settings.order.slice(0, 8));
       writeFlowFrames(settings.flowFrames ?? orderToFlowFrames(readOrder()));
     }
@@ -741,7 +775,9 @@
           mode: settings.mode ?? defaultSettings.mode,
           color: settings.color ?? defaultSettings.color,
           brightness: settings.brightness ?? defaultSettings.brightness,
-          period: settings.period ?? defaultSettings.period,
+          flowInterval: settings.flowInterval ?? settings.period ?? defaultSettings.flowInterval,
+          breathPeriod: settings.breathPeriod ?? settings.period ?? defaultSettings.breathPeriod,
+          gradientPeriod: settings.gradientPeriod ?? settings.period ?? defaultSettings.gradientPeriod,
           order: Array.isArray(settings.order) ? settings.order : defaultSettings.order,
           flowFrames: Array.isArray(settings.flowFrames) ? settings.flowFrames : null
         });
@@ -755,7 +791,7 @@
       const mode = clampByte(modeEl.value, 0);
       const [r, g, b] = parseColor(colorEl.value);
       const brightness = clampByte(brightnessEl.value, 0);
-      const period = Math.max(1, clampByte(periodEl.value, 20));
+      const period = Math.max(1, clampByte(activePeriodValue(mode), 20));
       const order = readOrder();
       const frames = activeFlowFrames();
       const payload = [mode, r, g, b, brightness, period, frames.length, ...frames];
@@ -777,13 +813,20 @@
       const isBreath = mode === 2;
       const isDisco = mode === 3;
       const isGradientFamily = mode === 4 || mode === 5;
+      const usesPeriod = isFlow || isBreath || isGradientFamily;
       flowBlockEl.classList.toggle("hidden", !isFlow);
-      periodBlockEl.classList.toggle("hidden", !(isBreath || isGradientFamily));
+      periodBlockEl.classList.toggle("hidden", !usesPeriod);
       colorBlockEl.classList.toggle("hidden", isDisco || isGradientFamily);
       colorEl.disabled = isDisco || isGradientFamily;
-      if (isBreath) {
+      const currentPeriod = activePeriodValue(mode);
+      periodEl.value = currentPeriod;
+      periodNumberEl.value = currentPeriod;
+      if (isFlow) {
+        periodLabelEl.textContent = "流水间隔";
+        periodHintEl.textContent = "单位 10ms，25 表示 250ms 切换一次画面。";
+      } else if (isBreath) {
         periodLabelEl.textContent = "呼吸周期";
-        periodHintEl.textContent = "单位 100ms，20 表示 2 秒完整呼吸周期。";
+        periodHintEl.textContent = "单位 20ms，100 表示 2 秒完整呼吸周期。";
       } else if (isGradientFamily) {
         periodLabelEl.textContent = "渐变周期";
         periodHintEl.textContent = "单位 50ms，20 表示 1 秒完整渐变周期。";
@@ -832,6 +875,10 @@
 
       if (frame.mode === 1 && !orderOk) {
         statusEl.innerHTML = "<span class='error'>基础流水灯序未点满；可继续使用高级画面发送，或点击“用基础灯序生成”。</span>";
+      } else if (frame.mode === 1) {
+        statusEl.textContent = `流水间隔：${frame.period * 10}ms，画面数：${frame.frames.length}，校验字节：${toHex(frame.checksum)}`;
+      } else if (frame.mode === 2) {
+        statusEl.textContent = `呼吸周期：${frame.period * 20}ms，画面数：${frame.frames.length}，校验字节：${toHex(frame.checksum)}`;
       } else if (frame.mode === 3) {
         statusEl.textContent = "Disco 模式使用板子内置的离散三色循环，RGB 和周期会被板子忽略。";
       } else if (frame.mode === 4 || frame.mode === 5) {
@@ -845,9 +892,20 @@
       saveSettings();
     }
 
-    [modeEl, colorEl].forEach((el) => {
+    [colorEl].forEach((el) => {
       el.addEventListener("input", update);
       el.addEventListener("change", update);
+    });
+
+    [modeEl].forEach((el) => {
+      el.addEventListener("input", () => {
+        renderModeHints(clampByte(modeEl.value, 0));
+        update();
+      });
+      el.addEventListener("change", () => {
+        renderModeHints(clampByte(modeEl.value, 0));
+        update();
+      });
     });
 
     flowLamps.forEach((lamp) => {
@@ -883,16 +941,19 @@
 
     periodEl.addEventListener("input", () => {
       syncNumberFromRange(periodEl, periodNumberEl);
+      syncTimingSettingFromInput(clampByte(modeEl.value, 0));
       update();
     });
 
     periodNumberEl.addEventListener("input", () => {
-      syncRangeFromNumber(periodNumberEl, periodEl, defaultSettings.period);
+      syncRangeFromNumber(periodNumberEl, periodEl, activePeriodValue(clampByte(modeEl.value, 0)));
+      syncTimingSettingFromInput(clampByte(modeEl.value, 0));
       update();
     });
 
     periodNumberEl.addEventListener("change", () => {
-      normalizeNumberInput(periodNumberEl, periodEl, defaultSettings.period);
+      normalizeNumberInput(periodNumberEl, periodEl, activePeriodValue(clampByte(modeEl.value, 0)));
+      syncTimingSettingFromInput(clampByte(modeEl.value, 0));
       update();
     });
 
