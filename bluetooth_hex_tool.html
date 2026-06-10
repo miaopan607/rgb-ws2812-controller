@@ -520,7 +520,7 @@
       breathPeriod: "100",
       gradientPeriod: "20",
       order: ["3", "2", "1", "0", "4", "5", "6", "7"],
-      flowFrames: [0x08, 0x04, 0x02, 0x01, 0x10, 0x20, 0x40, 0x80]
+      flowFrames: [0x00]
     };
     const lampToHardware = [3, 2, 1, 0, 4, 5, 6, 7]; // 页面上排从左到右与硬件编号相反，底排保持一致。
 
@@ -757,7 +757,7 @@
       periodEl.value = activePeriod;
       periodNumberEl.value = activePeriod;
       writeOrder(settings.order.slice(0, 8));
-      writeFlowFrames(settings.flowFrames ?? orderToFlowFrames(readOrder()));
+      writeFlowFrames(settings.flowFrames ?? defaultSettings.flowFrames);
     }
 
     function saveSettings() {
@@ -911,7 +911,6 @@
     flowLamps.forEach((lamp) => {
       lamp.addEventListener("click", () => {
         toggleLampInOrder(lampToHardware[clampByte(lamp.dataset.lamp, 0)]);
-        writeFlowFrames(orderToFlowFrames(readOrder()));
         update();
       });
     });
@@ -960,14 +959,12 @@
     document.querySelectorAll("[data-order]").forEach((button) => {
       button.addEventListener("click", () => {
         writeOrder(button.dataset.order.split(","));
-        writeFlowFrames(orderToFlowFrames(readOrder()));
         update();
       });
     });
 
     clearOrderButtonEl.addEventListener("click", () => {
       writeOrder([]);
-      writeFlowFrames([0]);
       update();
     });
 
