@@ -29,15 +29,20 @@ localparam [2:0] MODE_FLOW_GRADIENT = 3'd5; // 流动渐变：8 颗灯错相分�
 localparam [7:0] FRAME_HEAD0 = 8'hAA; // 固定帧头第 1 字节。
 localparam [7:0] FRAME_HEAD1 = 8'h55; // 固定帧头第 2 字节。
 
-localparam [1:0] RX_WAIT_HEAD0 = 2'd0; // 等待 0xAA。
-localparam [1:0] RX_WAIT_HEAD1 = 2'd1; // 等待 0x55。
-localparam [1:0] RX_PAYLOAD    = 2'd2; // 接收 mode 到最后一个流水画面。
-localparam [1:0] RX_CHECKSUM   = 2'd3; // 接收 XOR 校验字节。
+localparam [2:0] RX_WAIT_HEAD0    = 3'd0; // 等待 0xAA。
+localparam [2:0] RX_WAIT_HEAD1    = 3'd1; // 等待第二个帧头字节。
+localparam [2:0] RX_PAYLOAD       = 3'd2; // 接收旧协议 mode 到最后一个流水画面。
+localparam [2:0] RX_CHECKSUM      = 3'd3; // 接收旧协议 XOR 校验字节。
+localparam [2:0] RX_DIRECT_PAYLOAD  = 3'd4; // 接收实时直显 payload。
+localparam [2:0] RX_DIRECT_CHECKSUM = 3'd5; // 接收实时直显校验字节。
 
 localparam [7:0] DISCO_STEP_LAST    = 8'd249; // Disco 仍按 250 ms 切换一次，基于 1 ms tick。
 localparam [7:0] DEFAULT_BRIGHTNESS = 8'h11;  // 默认亮度，避免复位后过亮。
 localparam [3:0] BASE_PAYLOAD_LAST  = 4'd6;   // payload 第 6 字节为 flow_count。
 localparam [3:0] FLOW_FRAME_MAX     = 4'd8;   // 高级流水最多 8 个画面。
+localparam [7:0] DIRECT_HEAD1       = 8'h5A;  // 实时直显帧第二个帧头字节。
+localparam [7:0] DIRECT_TYPE_V1     = 8'h10;  // 实时直显帧类型。
+localparam [5:0] DIRECT_PAYLOAD_LAST = 6'd34; // type/seq/maxBrightness + 8*(RGB+level)。
 localparam [10:0] GRADIENT_PHASE_COUNT = 11'd1536; // 一轮六段平滑渐变共 1536 个相位。
 localparam [10:0] FLOW_GRADIENT_OFFSET = 11'd192;  // 8 颗灯均匀错相。
 
@@ -57,10 +62,21 @@ reg [7:0] flow_frame4;        // 流水第 4 个画面，bit0~bit7 对应 LED0~L
 reg [7:0] flow_frame5;        // 流水第 5 个画面，bit0~bit7 对应 LED0~LED7。
 reg [7:0] flow_frame6;        // 流水第 6 个画面，bit0~bit7 对应 LED0~LED7。
 reg [7:0] flow_frame7;        // 流水第 7 个画面，bit0~bit7 对应 LED0~LED7。
+reg       direct_active;      // 实时直显是否接管输出。
+reg [7:0] direct_brightness;  // 实时直显最大亮度。
+reg [31:0] direct_led0;       // {R,G,B,level}。
+reg [31:0] direct_led1;
+reg [31:0] direct_led2;
+reg [31:0] direct_led3;
+reg [31:0] direct_led4;
+reg [31:0] direct_led5;
+reg [31:0] direct_led6;
+reg [31:0] direct_led7;
 
 //==================== 协议解析暂存寄存器 ====================
-reg [1:0] rx_state;            // 可变长度帧接收状态机。
+reg [2:0] rx_state;            // 可变长度帧接收状态机。
 reg [3:0] payload_index;       // 当前接收的 payload 字节序号。
+reg [5:0] direct_payload_index; // 当前接收的实时直显 payload 字节序号。
 reg [7:0] checksum_accum;      // payload 字节 XOR 累加值。
 reg [7:0] tmp_mode;            // 暂存模式字段。
 reg [7:0] tmp_r;               // 暂存红色通道。
@@ -77,11 +93,23 @@ reg [7:0] tmp_flow_frame4;     // 暂存流水第 4 个画面。
 reg [7:0] tmp_flow_frame5;     // 暂存流水第 5 个画面。
 reg [7:0] tmp_flow_frame6;     // 暂存流水第 6 个画面。
 reg [7:0] tmp_flow_frame7;     // 暂存流水第 7 个画面。
+reg [7:0] tmp_direct_type;     // 暂存实时直显类型。
+reg [7:0] tmp_direct_seq;      // 暂存实时直显序号，当前仅用于接收完整性。
+reg [7:0] tmp_direct_brightness;
+reg [31:0] tmp_direct_led0;
+reg [31:0] tmp_direct_led1;
+reg [31:0] tmp_direct_led2;
+reg [31:0] tmp_direct_led3;
+reg [31:0] tmp_direct_led4;
+reg [31:0] tmp_direct_led5;
+reg [31:0] tmp_direct_led6;
+reg [31:0] tmp_direct_led7;
 
 wire frame_checksum_ok = (rx_data == checksum_accum);                         // 当前校验字节是否匹配 payload XOR。
 wire frame_mode_ok = (tmp_mode <= 8'd5);                                       // 模式字段是否合法。
 wire frame_flow_count_ok = (tmp_flow_count >= 8'd1) && (tmp_flow_count <= 8'd8); // 流水画面数量必须为 1~8。
 wire frame_accept = frame_checksum_ok && frame_mode_ok && frame_flow_count_ok;  // 整帧是否允许应用。
+wire direct_frame_accept = frame_checksum_ok && (tmp_direct_type == DIRECT_TYPE_V1);
 
 //==================== 时间基准计数器 ====================
 reg [15:0] cnt_1ms;                            // 1 ms 分频计数器，50 MHz 下计数 0~49999。
@@ -184,6 +212,23 @@ function [191:0] pack_rgb8;
     end
 endfunction
 
+//------------------------------------------------------------------------------
+// 函数: scale_direct_led
+// 功能: 实时直显模式下按每灯 level 预缩放 RGB。
+//------------------------------------------------------------------------------
+function [23:0] scale_direct_led;
+    input [31:0] led_value; // {R,G,B,level}。
+    reg [15:0] scaled_r;
+    reg [15:0] scaled_g;
+    reg [15:0] scaled_b;
+    begin
+        scaled_r = led_value[31:24] * led_value[7:0];
+        scaled_g = led_value[23:16] * led_value[7:0];
+        scaled_b = led_value[15:8] * led_value[7:0];
+        scale_direct_led = {scaled_r[15:8], scaled_g[15:8], scaled_b[15:8]};
+    end
+endfunction
+
 //==================== 1. 蓝牙可变长度帧解析 ====================
 // 通信协议: AA 55 mode R G B brightness period flow_count frame0..frameN-1 checksum。
 // checksum 为 mode 到最后一个 frame 共 7+N 字节的 XOR；校验和画面数量合法后才更新配置。
@@ -192,6 +237,7 @@ always @(posedge clk or negedge rst_n) begin
         rx_state <= RX_WAIT_HEAD0;
         payload_index <= 4'd0;
         checksum_accum <= 8'd0;
+        direct_payload_index <= 6'd0;
         tmp_mode <= 8'd0;
         tmp_r <= 8'd0;
         tmp_g <= 8'd0;
@@ -207,6 +253,17 @@ always @(posedge clk or negedge rst_n) begin
         tmp_flow_frame5 <= 8'b0010_0000;
         tmp_flow_frame6 <= 8'b0100_0000;
         tmp_flow_frame7 <= 8'b1000_0000;
+        tmp_direct_type <= 8'd0;
+        tmp_direct_seq <= 8'd0;
+        tmp_direct_brightness <= 8'd0;
+        tmp_direct_led0 <= 32'd0;
+        tmp_direct_led1 <= 32'd0;
+        tmp_direct_led2 <= 32'd0;
+        tmp_direct_led3 <= 32'd0;
+        tmp_direct_led4 <= 32'd0;
+        tmp_direct_led5 <= 32'd0;
+        tmp_direct_led6 <= 32'd0;
+        tmp_direct_led7 <= 32'd0;
     end else if(rx_done) begin
         case(rx_state)
             RX_WAIT_HEAD0: begin
@@ -216,6 +273,10 @@ always @(posedge clk or negedge rst_n) begin
                 if(rx_data == FRAME_HEAD1) begin
                     rx_state <= RX_PAYLOAD;
                     payload_index <= 4'd0;
+                    checksum_accum <= 8'd0;
+                end else if(rx_data == DIRECT_HEAD1) begin
+                    rx_state <= RX_DIRECT_PAYLOAD;
+                    direct_payload_index <= 6'd0;
                     checksum_accum <= 8'd0;
                 end else if(rx_data == FRAME_HEAD0) begin
                     rx_state <= RX_WAIT_HEAD1;
@@ -257,6 +318,51 @@ always @(posedge clk or negedge rst_n) begin
                     payload_index <= payload_index + 1'b1;
                 end
             end
+            RX_DIRECT_PAYLOAD: begin
+                checksum_accum <= checksum_accum ^ rx_data;
+                case(direct_payload_index)
+                    6'd0:  tmp_direct_type <= rx_data;
+                    6'd1:  tmp_direct_seq <= rx_data;
+                    6'd2:  tmp_direct_brightness <= rx_data;
+                    6'd3:  tmp_direct_led0[31:24] <= rx_data;
+                    6'd4:  tmp_direct_led0[23:16] <= rx_data;
+                    6'd5:  tmp_direct_led0[15:8] <= rx_data;
+                    6'd6:  tmp_direct_led0[7:0] <= rx_data;
+                    6'd7:  tmp_direct_led1[31:24] <= rx_data;
+                    6'd8:  tmp_direct_led1[23:16] <= rx_data;
+                    6'd9:  tmp_direct_led1[15:8] <= rx_data;
+                    6'd10: tmp_direct_led1[7:0] <= rx_data;
+                    6'd11: tmp_direct_led2[31:24] <= rx_data;
+                    6'd12: tmp_direct_led2[23:16] <= rx_data;
+                    6'd13: tmp_direct_led2[15:8] <= rx_data;
+                    6'd14: tmp_direct_led2[7:0] <= rx_data;
+                    6'd15: tmp_direct_led3[31:24] <= rx_data;
+                    6'd16: tmp_direct_led3[23:16] <= rx_data;
+                    6'd17: tmp_direct_led3[15:8] <= rx_data;
+                    6'd18: tmp_direct_led3[7:0] <= rx_data;
+                    6'd19: tmp_direct_led4[31:24] <= rx_data;
+                    6'd20: tmp_direct_led4[23:16] <= rx_data;
+                    6'd21: tmp_direct_led4[15:8] <= rx_data;
+                    6'd22: tmp_direct_led4[7:0] <= rx_data;
+                    6'd23: tmp_direct_led5[31:24] <= rx_data;
+                    6'd24: tmp_direct_led5[23:16] <= rx_data;
+                    6'd25: tmp_direct_led5[15:8] <= rx_data;
+                    6'd26: tmp_direct_led5[7:0] <= rx_data;
+                    6'd27: tmp_direct_led6[31:24] <= rx_data;
+                    6'd28: tmp_direct_led6[23:16] <= rx_data;
+                    6'd29: tmp_direct_led6[15:8] <= rx_data;
+                    6'd30: tmp_direct_led6[7:0] <= rx_data;
+                    6'd31: tmp_direct_led7[31:24] <= rx_data;
+                    6'd32: tmp_direct_led7[23:16] <= rx_data;
+                    6'd33: tmp_direct_led7[15:8] <= rx_data;
+                    default: tmp_direct_led7[7:0] <= rx_data;
+                endcase
+                if(direct_payload_index == DIRECT_PAYLOAD_LAST) begin
+                    rx_state <= RX_DIRECT_CHECKSUM;
+                end else begin
+                    direct_payload_index <= direct_payload_index + 1'b1;
+                end
+            end
             default: begin
                 // 校验字节处理完后无论成功与否都回到找帧头状态，等待下一帧。
                 rx_state <= RX_WAIT_HEAD0;
@@ -284,7 +390,18 @@ always @(posedge clk or negedge rst_n) begin
         flow_frame5 <= 8'b0010_0000;
         flow_frame6 <= 8'b0100_0000;
         flow_frame7 <= 8'b1000_0000;
+        direct_active <= 1'b0;
+        direct_brightness <= 8'd0;
+        direct_led0 <= 32'd0;
+        direct_led1 <= 32'd0;
+        direct_led2 <= 32'd0;
+        direct_led3 <= 32'd0;
+        direct_led4 <= 32'd0;
+        direct_led5 <= 32'd0;
+        direct_led6 <= 32'd0;
+        direct_led7 <= 32'd0;
     end else if(rx_done && (rx_state == RX_CHECKSUM) && frame_accept) begin
+        direct_active <= 1'b0;
         sys_mode <= tmp_mode[2:0];
         cfg_r <= tmp_r;
         cfg_g <= tmp_g;
@@ -300,6 +417,17 @@ always @(posedge clk or negedge rst_n) begin
         flow_frame5 <= tmp_flow_frame5;
         flow_frame6 <= tmp_flow_frame6;
         flow_frame7 <= tmp_flow_frame7;
+    end else if(rx_done && (rx_state == RX_DIRECT_CHECKSUM) && direct_frame_accept) begin
+        direct_active <= 1'b1;
+        direct_brightness <= tmp_direct_brightness;
+        direct_led0 <= tmp_direct_led0;
+        direct_led1 <= tmp_direct_led1;
+        direct_led2 <= tmp_direct_led2;
+        direct_led3 <= tmp_direct_led3;
+        direct_led4 <= tmp_direct_led4;
+        direct_led5 <= tmp_direct_led5;
+        direct_led6 <= tmp_direct_led6;
+        direct_led7 <= tmp_direct_led7;
     end
 end
 
@@ -361,7 +489,8 @@ reg [191:0] led_rgb_data;   // 输出给 ws2812_fast 的 8 颗 LED RGB 数据。
 wire [23:0] cfg_rgb = {cfg_r, cfg_g, cfg_b};               // 当前 App 下发的基础 RGB 颜色。
 wire [7:0]  active_flow_frame = get_flow_frame(run_pos);   // 流水当前画面的 8 bit 灯掩码。
 wire [3:0]  flow_last_pos = cfg_flow_count - 1'b1;         // 当前流水最后一个有效画面位置。
-wire [15:0] output_brightness = (sys_mode == MODE_BREATH) ? breath_bright : {cfg_brightness, cfg_brightness};
+wire [15:0] output_brightness = direct_active ? {direct_brightness, direct_brightness} :
+                                ((sys_mode == MODE_BREATH) ? breath_bright : {cfg_brightness, cfg_brightness});
 wire [15:0] flow_period_ms = {cfg_period_units, 3'b000} + {cfg_period_units, 1'b0}; // period * 10。
 wire [15:0] flow_period_safe = (flow_period_ms < 16'd1) ? 16'd1 : flow_period_ms;
 wire [15:0] gradient_period_ms = {cfg_period_units, 5'b0} + {cfg_period_units, 4'b0} + {cfg_period_units, 1'b0}; // period * 50。
@@ -444,11 +573,23 @@ always @(posedge clk or negedge rst_n) begin
             endcase
         end
 
-        case(sys_mode)
-            MODE_STATIC: begin
+        if(direct_active) begin
+            led_rgb_data <= pack_rgb8(
+                scale_direct_led(direct_led0),
+                scale_direct_led(direct_led1),
+                scale_direct_led(direct_led2),
+                scale_direct_led(direct_led3),
+                scale_direct_led(direct_led4),
+                scale_direct_led(direct_led5),
+                scale_direct_led(direct_led6),
+                scale_direct_led(direct_led7)
+            );
+        end else begin
+            case(sys_mode)
+                MODE_STATIC: begin
                 led_rgb_data <= pack_rgb8(cfg_rgb, cfg_rgb, cfg_rgb, cfg_rgb, cfg_rgb, cfg_rgb, cfg_rgb, cfg_rgb);
-            end
-            MODE_FLOW: begin
+                end
+                MODE_FLOW: begin
                 led_rgb_data <= pack_rgb8(
                     active_flow_frame[0] ? cfg_rgb : 24'd0,
                     active_flow_frame[1] ? cfg_rgb : 24'd0,
@@ -459,11 +600,11 @@ always @(posedge clk or negedge rst_n) begin
                     active_flow_frame[6] ? cfg_rgb : 24'd0,
                     active_flow_frame[7] ? cfg_rgb : 24'd0
                 );
-            end
-            MODE_BREATH: begin
+                end
+                MODE_BREATH: begin
                 led_rgb_data <= pack_rgb8(cfg_rgb, cfg_rgb, cfg_rgb, cfg_rgb, cfg_rgb, cfg_rgb, cfg_rgb, cfg_rgb);
-            end
-            MODE_DISCO: begin
+                end
+                MODE_DISCO: begin
                 led_rgb_data <= pack_rgb8(
                     disco_rgb(disco_phase + 3'd0),
                     disco_rgb(disco_phase + 3'd1),
@@ -474,8 +615,8 @@ always @(posedge clk or negedge rst_n) begin
                     disco_rgb(disco_phase + 3'd6),
                     disco_rgb(disco_phase + 3'd7)
                 );
-            end
-            MODE_GRADIENT: begin
+                end
+                MODE_GRADIENT: begin
                 led_rgb_data <= pack_rgb8(
                     gradient_cycle_rgb(gradient_phase),
                     gradient_cycle_rgb(gradient_phase),
@@ -486,8 +627,8 @@ always @(posedge clk or negedge rst_n) begin
                     gradient_cycle_rgb(gradient_phase),
                     gradient_cycle_rgb(gradient_phase)
                 );
-            end
-            default: begin
+                end
+                default: begin
                 led_rgb_data <= pack_rgb8(
                     gradient_cycle_rgb(add_gradient_phase(gradient_phase, 11'd0)),
                     gradient_cycle_rgb(add_gradient_phase(gradient_phase, FLOW_GRADIENT_OFFSET)),
@@ -498,8 +639,9 @@ always @(posedge clk or negedge rst_n) begin
                     gradient_cycle_rgb(add_gradient_phase(gradient_phase, FLOW_GRADIENT_OFFSET * 6)),
                     gradient_cycle_rgb(add_gradient_phase(gradient_phase, FLOW_GRADIENT_OFFSET * 7))
                 );
-            end
-        endcase
+                end
+            endcase
+        end
     end
 end
 
